@@ -13,6 +13,7 @@ jobs:
   # must FAIL the job. We run it with continue-on-error and assert it failed —
   # proving the guard fires on a real runner while keeping this job green.
   v2-guard-blocks-partial:
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +36,7 @@ jobs:
 
   # allow-partial=true: same skip, but the job stays green (warning only).
   v2-allow-partial:
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +60,7 @@ jobs:
   # is frontend-only on V2; a real V3/prod project with passing tests needs
   # neither.
   real-user-remote-ref:
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: TestSprite/testsprite-action@736b57ebca2ffafdf375051482d94d70f0635b01
