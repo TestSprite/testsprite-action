@@ -66,3 +66,30 @@ jobs:
           project: "19475ce4-44c9-41e2-b1f6-5dc73d58cf36"
           endpoint-url: "https://api.testsprite.com:11443"
           allow-partial: "true"
+
+  # V3 real execution: a V3 project runs frontend tests natively, so this
+  # actually executes a browser test (filtered to one) and produces a JUnit
+  # report with real test cases — exercising upload-artifact, per-test
+  # annotations, and the job summary. continue-on-error because the browser test
+  # may pass or fail; we verify the plumbing (report has cases + is uploaded),
+  # not the verdict. Manual-only to control credit usage.
+  v3-real-execution:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: run
+        continue-on-error: true
+        uses: ./
+        with:
+          api-key: ${{ secrets.TESTSPRITE_API_KEY_V3 }}
+          project: "90048e9c-4de3-4266-bee5-5d722df101b4"
+          filter: "price filtering"
+          endpoint-url: "https://api.testsprite.com:11443"
+          report-file: "results/junit.xml"
+      - name: Verify a JUnit report with real test cases was produced
+        run: |
+          echo "outcome=${{ steps.run.outcome }} passed=${{ steps.run.outputs.passed }} failed=${{ steps.run.outputs.failed }} total=${{ steps.run.outputs.total }}"
+          test -s results/junit.xml || { echo "::error::no JUnit report written"; exit 1; }
+          grep -q "<testcase" results/junit.xml || { echo "::error::JUnit report has no <testcase>"; exit 1; }
+          echo "OK — JUnit report with test cases:"; cat results/junit.xml
