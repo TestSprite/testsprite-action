@@ -101,6 +101,9 @@ runs:
       run: |
         set -uo pipefail
         report="$INPUT_REPORT_FILE"
+        # The CLI requires the report's parent directory to exist; create it so a
+        # nested report-file path (e.g. results/junit.xml) doesn't fail validation.
+        mkdir -p "$(dirname "$report")"
         summary="$(mktemp)"
         envjson="$(mktemp)"
 
