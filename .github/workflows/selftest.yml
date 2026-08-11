@@ -49,3 +49,20 @@ jobs:
         run: |
           echo "passed=${{ steps.run.outputs.passed }} failed=${{ steps.run.outputs.failed }} total=${{ steps.run.outputs.total }}"
           echo "junit=${{ steps.run.outputs.junit-file }}"
+
+  # Real-user shape: reference the action REMOTELY by ref (what a consumer's
+  # workflow does), NOT `./`. No checkout, no continue-on-error, no assert — just
+  # `uses` + api-key + project. This exercises GitHub's action-resolution path
+  # (fetch the repo at the pinned ref, load its action.yml, run the composite).
+  # `endpoint-url` / `allow-partial` are here only because the dev test project
+  # is frontend-only on V2; a real V3/prod project with passing tests needs
+  # neither.
+  real-user-remote-ref:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: TestSprite/testsprite-action@736b57ebca2ffafdf375051482d94d70f0635b01
+        with:
+          api-key: ${{ secrets.TESTSPRITE_API_KEY_V2 }}
+          project: "19475ce4-44c9-41e2-b1f6-5dc73d58cf36"
+          endpoint-url: "https://api.testsprite.com:11443"
+          allow-partial: "true"
