@@ -1,0 +1,156 @@
+name: "TestSprite"
+description: >
+  Run TestSprite tests in GitHub Actions via the testsprite CLI. Installs the
+  CLI, runs a project's tests to a terminal verdict, writes a JUnit report,
+  emits ::error:: annotations + a job summary for failures, and (by default)
+  fails the job when tests are skipped so partial runs are never green.
+author: "TestSprite"
+
+branding:
+  icon: check-circle
+  color: purple
+
+inputs:
+  api-key:
+    description: "TestSprite API key. Pass a secret, e.g. ${{ secrets.TESTSPRITE_API_KEY }}."
+    required: true
+  project:
+    description: "Project id to run. If empty, TESTSPRITE_PROJECT_ID must be set in the env."
+    required: false
+    default: ""
+  filter:
+    description: "Only run tests whose name contains this substring (case-insensitive)."
+    required: false
+    default: ""
+  target-url:
+    description: "Optional target URL override (applied on the V2 path; ignored on V3)."
+    required: false
+    default: ""
+  report-file:
+    description: "Path for the JUnit XML report."
+    required: false
+    default: "testsprite-junit.xml"
+  cli-version:
+    description: "npm version or dist-tag of @testsprite/testsprite-cli to install."
+    required: false
+    default: "latest"
+  allow-partial:
+    description: >
+      When false (default), the job fails if any test was skipped and did not
+      run (e.g. frontend tests on the V2 execution path). Set true to accept
+      partial runs.
+    required: false
+    default: "false"
+  timeout:
+    description: "Max seconds to wait for a terminal verdict (1-3600)."
+    required: false
+    default: "600"
+  endpoint-url:
+    description: "Optional API base URL override (else the built-in production endpoint)."
+    required: false
+    default: ""
+  node-version:
+    description: "Node version to set up for installing/running the CLI."
+    required: false
+    default: "lts/*"
+  upload-artifact:
+    description: "Upload the JUnit report as a workflow artifact."
+    required: false
+    default: "true"
+
+outputs:
+  junit-file:
+    description: "Path to the JUnit report."
+    value: ${{ inputs.report-file }}
+  passed:
+    description: "Number of tests that passed."
+    value: ${{ steps.run.outputs.passed }}
+  failed:
+    description: "Number of tests that did not pass."
+    value: ${{ steps.run.outputs.failed }}
+  total:
+    description: "Total tests in the summary."
+    value: ${{ steps.run.outputs.total }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install testsprite CLI
+      shell: bash
+      run: npm install -g @testsprite/testsprite-cli@${{ inputs.cli-version }}
+
+    - name: Run TestSprite tests
+      id: run
+      shell: bash
+      env:
+        # All inputs travel via env (never interpolated into the script body)
+        # so a value can't inject shell.
+        TESTSPRITE_API_KEY: ${{ inputs.api-key }}
+        TESTSPRITE_API_URL: ${{ inputs.endpoint-url }}
+        TESTSPRITE_PROJECT_ID: ${{ inputs.project }}
+        INPUT_REPORT_FILE: ${{ inputs.report-file }}
+        INPUT_FILTER: ${{ inputs.filter }}
+        INPUT_TARGET_URL: ${{ inputs.target-url }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+        INPUT_ALLOW_PARTIAL: ${{ inputs.allow-partial }}
+      run: |
+        set -uo pipefail
+        report="$INPUT_REPORT_FILE"
+        summary="$(mktemp)"
+        envjson="$(mktemp)"
+
+        # --gh-output auto-enables under GITHUB_ACTIONS=true, so ::error::
+        # annotations + the $GITHUB_STEP_SUMMARY table are emitted for free.
+        # --output json puts the machine envelope on stdout (captured here) and
+        # routes annotations to stderr (shown in the log + parsed by Actions).
+        args=(test run --all --wait --output json
+              --report junit --report-file "$report"
+              --summary-file "$summary"
+              --timeout "$INPUT_TIMEOUT")
+        if [ -n "$INPUT_FILTER" ]; then args+=(--filter "$INPUT_FILTER"); fi
+        if [ -n "$INPUT_TARGET_URL" ]; then args+=(--target-url "$INPUT_TARGET_URL"); fi
+
+        set +e
+        testsprite "${args[@]}" > "$envjson"
+        code=$?
+        set -e
+
+        # Counts from the machine summary (best-effort).
+        passed=0; failed=0; total=0
+        if [ -s "$summary" ]; then
+          passed=$(jq -r '.passed // 0' "$summary" 2>/dev/null || echo 0)
+          failed=$(jq -r '.failed // 0' "$summary" 2>/dev/null || echo 0)
+          total=$(jq -r '.total  // 0' "$summary" 2>/dev/null || echo 0)
+        fi
+        {
+          echo "passed=$passed"
+          echo "failed=$failed"
+          echo "total=$total"
+        } >> "$GITHUB_OUTPUT"
+
+        # Partial-run guard: skipped tests (e.g. frontend tests on the V2 path)
+        # do NOT affect the CLI exit code, so a partial batch can exit 0. Detect
+        # them from the raw envelope and fail unless allow-partial is set.
+        skipped=$(jq -r '((.skippedFrontend // []) + (.skippedIntegration // [])) | length' "$envjson" 2>/dev/null || echo 0)
+        if [ "${skipped:-0}" -gt 0 ]; then
+          echo "::warning title=TestSprite::${skipped} test(s) were skipped and did not run (e.g. frontend tests on the V2 execution path)."
+          if [ "$INPUT_ALLOW_PARTIAL" != "true" ]; then
+            echo "::error title=TestSprite::${skipped} test(s) skipped — failing the job. Set allow-partial: true to accept partial runs, or use a V3 project / test list for full coverage."
+            exit 1
+          fi
+        fi
+
+        exit "$code"
+
+    - name: Upload JUnit report
+      if: ${{ always() && inputs.upload-artifact == 'true' && hashFiles(inputs.report-file) != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: testsprite-junit
+        path: ${{ inputs.report-file }}
+        if-no-files-found: ignore

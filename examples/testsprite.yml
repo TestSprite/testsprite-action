@@ -1,0 +1,21 @@
+# Example workflow — drop this into .github/workflows/ in your repo.
+name: TestSprite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run TestSprite tests
+        id: testsprite
+        uses: TestSprite/testsprite-action@<sha> # beta: pin a commit SHA
+        with:
+          api-key: ${{ secrets.TESTSPRITE_API_KEY }}
+          project: "your-project-id"
+          # filter: "checkout"        # optional: only tests whose name contains this
+          # allow-partial: false      # default: fail the job if tests are skipped
+          # timeout: 600
