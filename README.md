@@ -43,7 +43,8 @@ pass — or if tests were skipped (see [`allow-partial`](#partial-runs)).
 | ----------------- | -------------------- | --------------------------------------------------------------------------- |
 | `api-key`         | — (required)         | TestSprite API key. Pass a secret.                                          |
 | `project`         | `""`                 | Project id. If empty, `TESTSPRITE_PROJECT_ID` must be set.                  |
-| `filter`          | `""`                 | Only run tests whose name contains this substring.                          |
+| `test-id`         | `""`                 | Run a single test by id (whole-project run otherwise). `project`/`filter` ignored; no JUnit (batch-only). |
+| `filter`          | `""`                 | Only run tests whose name contains this substring. Full-project run only; mutually exclusive with `test-id`. |
 | `target-url`      | `""`                 | Target URL override (V2 path only; ignored on V3).                          |
 | `report-file`     | `testsprite-junit.xml` | JUnit XML path.                                                           |
 | `cli-version`     | `latest`             | npm version/dist-tag of `@testsprite/testsprite-cli`.                       |

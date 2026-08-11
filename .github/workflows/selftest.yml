@@ -96,3 +96,24 @@ jobs:
           test -s results/junit.xml || { echo "::error::no JUnit report written"; exit 1; }
           grep -q "<testcase" results/junit.xml || { echo "::error::JUnit report has no <testcase>"; exit 1; }
           echo "OK — JUnit report with test cases:"; cat results/junit.xml
+
+  # Single-test-by-id mode on a real runner with the PUBLISHED CLI (no Gap A).
+  # A single test runs → verdict from the run envelope → red/green + counts.
+  # (Annotation appears once a CLI with single-test CI output is published.)
+  v3-single-test:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: run
+        continue-on-error: true
+        uses: ./
+        with:
+          api-key: ${{ secrets.TESTSPRITE_API_KEY_V3 }}
+          test-id: "46872b89-f74f-4443-8fe6-36a93cdb0dc2"
+          endpoint-url: "https://api.testsprite.com:11443"
+      - name: Verify single-test verdict + outputs
+        run: |
+          echo "outcome=${{ steps.run.outcome }} passed=${{ steps.run.outputs.passed }} failed=${{ steps.run.outputs.failed }} total=${{ steps.run.outputs.total }}"
+          test "${{ steps.run.outputs.total }}" = "1" || { echo "::error::expected total=1 for a single test"; exit 1; }
+          echo "OK — single test produced total=1 and a pass/fail verdict."

@@ -18,8 +18,18 @@ inputs:
     description: "Project id to run. If empty, TESTSPRITE_PROJECT_ID must be set in the env."
     required: false
     default: ""
+  test-id:
+    description: >
+      Run a single test by id instead of the whole project. When set, `project`
+      and `filter` are ignored and no JUnit report is produced (the CLI's JUnit
+      report is batch-only); the job still goes red/green on the verdict and
+      emits a summary + annotation.
+    required: false
+    default: ""
   filter:
-    description: "Only run tests whose name contains this substring (case-insensitive)."
+    description: >
+      Only run tests whose name contains this substring (case-insensitive).
+      Applies to the full-project run only; mutually exclusive with test-id.
     required: false
     default: ""
   target-url:
@@ -94,57 +104,75 @@ runs:
         TESTSPRITE_API_URL: ${{ inputs.endpoint-url }}
         TESTSPRITE_PROJECT_ID: ${{ inputs.project }}
         INPUT_REPORT_FILE: ${{ inputs.report-file }}
+        INPUT_TEST_ID: ${{ inputs.test-id }}
         INPUT_FILTER: ${{ inputs.filter }}
         INPUT_TARGET_URL: ${{ inputs.target-url }}
         INPUT_TIMEOUT: ${{ inputs.timeout }}
         INPUT_ALLOW_PARTIAL: ${{ inputs.allow-partial }}
       run: |
         set -uo pipefail
-        report="$INPUT_REPORT_FILE"
-        # The CLI requires the report's parent directory to exist; create it so a
-        # nested report-file path (e.g. results/junit.xml) doesn't fail validation.
-        mkdir -p "$(dirname "$report")"
+        if [ -n "$INPUT_TEST_ID" ] && [ -n "$INPUT_FILTER" ]; then
+          echo "::error title=TestSprite::test-id and filter are mutually exclusive (filter only applies to a full-project run)."
+          exit 1
+        fi
         summary="$(mktemp)"
         envjson="$(mktemp)"
-
-        # --gh-output auto-enables under GITHUB_ACTIONS=true, so ::error::
-        # annotations + the $GITHUB_STEP_SUMMARY table are emitted for free.
-        # --output json puts the machine envelope on stdout (captured here) and
-        # routes annotations to stderr (shown in the log + parsed by Actions).
-        args=(test run --all --wait --output json
-              --report junit --report-file "$report"
-              --summary-file "$summary"
-              --timeout "$INPUT_TIMEOUT")
-        if [ -n "$INPUT_FILTER" ]; then args+=(--filter "$INPUT_FILTER"); fi
-        if [ -n "$INPUT_TARGET_URL" ]; then args+=(--target-url "$INPUT_TARGET_URL"); fi
-
-        set +e
-        testsprite "${args[@]}" > "$envjson"
-        code=$?
-        set -e
-
-        # Counts from the machine summary (best-effort).
         passed=0; failed=0; total=0
-        if [ -s "$summary" ]; then
-          passed=$(jq -r '.passed // 0' "$summary" 2>/dev/null || echo 0)
-          failed=$(jq -r '.failed // 0' "$summary" 2>/dev/null || echo 0)
-          total=$(jq -r '.total  // 0' "$summary" 2>/dev/null || echo 0)
+
+        # --output json puts the machine envelope on stdout (captured here) and
+        # routes CLI annotations to stderr (shown in the log + parsed by Actions).
+        if [ -n "$INPUT_TEST_ID" ]; then
+          # Single test by id. The CLI's JUnit report is batch-only, so there is
+          # no report here; the verdict comes from the run envelope's status and
+          # the non-zero exit reds the job. The CLI emits the ::error annotation
+          # itself under GITHUB_ACTIONS on a CLI version with single-test CI
+          # output (DEV-772); older versions just red/green without an annotation.
+          args=(test run "$INPUT_TEST_ID" --wait --output json --timeout "$INPUT_TIMEOUT")
+          if [ -n "$INPUT_TARGET_URL" ]; then args+=(--target-url "$INPUT_TARGET_URL"); fi
+          set +e; testsprite "${args[@]}" > "$envjson"; code=$?; set -e
+          status=$(jq -r '.status // "unknown"' "$envjson" 2>/dev/null || echo unknown)
+          total=1
+          if [ "$status" = "passed" ]; then passed=1; else failed=1; fi
+        else
+          # Whole project (optionally name-filtered), with a JUnit report.
+          # --gh-output auto-enables under GITHUB_ACTIONS=true, so ::error::
+          # annotations + the $GITHUB_STEP_SUMMARY table are emitted for free.
+          report="$INPUT_REPORT_FILE"
+          # The CLI requires the report's parent dir to exist; create it so a
+          # nested report-file path (e.g. results/junit.xml) doesn't fail.
+          mkdir -p "$(dirname "$report")"
+          args=(test run --all --wait --output json
+                --report junit --report-file "$report"
+                --summary-file "$summary"
+                --timeout "$INPUT_TIMEOUT")
+          if [ -n "$INPUT_FILTER" ]; then args+=(--filter "$INPUT_FILTER"); fi
+          if [ -n "$INPUT_TARGET_URL" ]; then args+=(--target-url "$INPUT_TARGET_URL"); fi
+          set +e; testsprite "${args[@]}" > "$envjson"; code=$?; set -e
+          if [ -s "$summary" ]; then
+            passed=$(jq -r '.passed // 0' "$summary" 2>/dev/null || echo 0)
+            failed=$(jq -r '.failed // 0' "$summary" 2>/dev/null || echo 0)
+            total=$(jq -r '.total  // 0' "$summary" 2>/dev/null || echo 0)
+          fi
         fi
+
         {
           echo "passed=$passed"
           echo "failed=$failed"
           echo "total=$total"
         } >> "$GITHUB_OUTPUT"
 
-        # Partial-run guard: skipped tests (e.g. frontend tests on the V2 path)
-        # do NOT affect the CLI exit code, so a partial batch can exit 0. Detect
-        # them from the raw envelope and fail unless allow-partial is set.
-        skipped=$(jq -r '((.skippedFrontend // []) + (.skippedIntegration // [])) | length' "$envjson" 2>/dev/null || echo 0)
-        if [ "${skipped:-0}" -gt 0 ]; then
-          echo "::warning title=TestSprite::${skipped} test(s) were skipped and did not run (e.g. frontend tests on the V2 execution path)."
-          if [ "$INPUT_ALLOW_PARTIAL" != "true" ]; then
-            echo "::error title=TestSprite::${skipped} test(s) skipped — failing the job. Set allow-partial: true to accept partial runs, or use a V3 project / test list for full coverage."
-            exit 1
+        # Partial-run guard (full-project runs only): skipped tests (e.g. frontend
+        # tests on the V2 path) do NOT affect the CLI exit code, so a partial
+        # batch can exit 0. Detect them from the envelope and fail unless
+        # allow-partial is set.
+        if [ -z "$INPUT_TEST_ID" ]; then
+          skipped=$(jq -r '((.skippedFrontend // []) + (.skippedIntegration // [])) | length' "$envjson" 2>/dev/null || echo 0)
+          if [ "${skipped:-0}" -gt 0 ]; then
+            echo "::warning title=TestSprite::${skipped} test(s) were skipped and did not run (e.g. frontend tests on the V2 execution path)."
+            if [ "$INPUT_ALLOW_PARTIAL" != "true" ]; then
+              echo "::error title=TestSprite::${skipped} test(s) skipped — failing the job. Set allow-partial: true to accept partial runs, or use a V3 project / test list for full coverage."
+              exit 1
+            fi
           fi
         fi
 
