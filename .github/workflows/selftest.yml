@@ -105,6 +105,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Plant a stale report at the default path (as if a prior --all run wrote
+      # it). Single-test mode must NOT upload it or advertise it as its output.
+      - run: echo '<testsuites><testsuite tests="1"/></testsuites>' > testsprite-junit.xml
       - id: run
         continue-on-error: true
         uses: ./
@@ -114,6 +117,9 @@ jobs:
           endpoint-url: "https://api.testsprite.com:11443"
       - name: Verify single-test verdict + outputs
         run: |
-          echo "outcome=${{ steps.run.outcome }} passed=${{ steps.run.outputs.passed }} failed=${{ steps.run.outputs.failed }} total=${{ steps.run.outputs.total }}"
+          echo "outcome=${{ steps.run.outcome }} passed=${{ steps.run.outputs.passed }} failed=${{ steps.run.outputs.failed }} total=${{ steps.run.outputs.total }} junit-file='${{ steps.run.outputs.junit-file }}'"
           test "${{ steps.run.outputs.total }}" = "1" || { echo "::error::expected total=1 for a single test"; exit 1; }
-          echo "OK — single test produced total=1 and a pass/fail verdict."
+          # junit-file output must be EMPTY in single-test mode even though a
+          # stale testsprite-junit.xml is present (Codex finding).
+          test -z "${{ steps.run.outputs.junit-file }}" || { echo "::error::junit-file should be empty in single-test mode, got '${{ steps.run.outputs.junit-file }}'"; exit 1; }
+          echo "OK — single test: total=1, no JUnit advertised despite a stale file."

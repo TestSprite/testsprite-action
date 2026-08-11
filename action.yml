@@ -70,8 +70,8 @@ inputs:
 
 outputs:
   junit-file:
-    description: "Path to the JUnit report."
-    value: ${{ inputs.report-file }}
+    description: "Path to the JUnit report (empty in single-test mode — JUnit is batch-only)."
+    value: ${{ inputs.test-id == '' && inputs.report-file || '' }}
   passed:
     description: "Number of tests that passed."
     value: ${{ steps.run.outputs.passed }}
@@ -179,7 +179,10 @@ runs:
         exit "$code"
 
     - name: Upload JUnit report
-      if: ${{ always() && inputs.upload-artifact == 'true' && hashFiles(inputs.report-file) != '' }}
+      # Only the full-project run produces a JUnit report. Gate on an empty
+      # test-id so a single-test run never uploads a stale/pre-existing file at
+      # the default report path as if it were this run's result.
+      if: ${{ always() && inputs.test-id == '' && inputs.upload-artifact == 'true' && hashFiles(inputs.report-file) != '' }}
       uses: actions/upload-artifact@v4
       with:
         name: testsprite-junit
