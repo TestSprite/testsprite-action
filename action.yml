@@ -12,7 +12,7 @@ branding:
 
 inputs:
   api-key:
-    description: "TestSprite API key. Pass a secret, e.g. ${{ secrets.TESTSPRITE_API_KEY }}."
+    description: "TestSprite API key. Store it as an encrypted repository secret and pass it here."
     required: true
   project:
     description: "Project id to run. If empty, TESTSPRITE_PROJECT_ID must be set in the env."
