@@ -1,0 +1,51 @@
+# Self-test: exercise the action end-to-end on a real GitHub runner against the
+# dev backend. The V2 project has frontend-only tests, which the V2 execution
+# path skips — so it deterministically drives the partial-run guard (no browser
+# execution, no credits).
+name: selftest
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  # allow-partial=false (default): FE tests are skipped on V2, so the action
+  # must FAIL the job. We run it with continue-on-error and assert it failed —
+  # proving the guard fires on a real runner while keeping this job green.
+  v2-guard-blocks-partial:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: run
+        continue-on-error: true
+        uses: ./
+        with:
+          api-key: ${{ secrets.TESTSPRITE_API_KEY_V2 }}
+          project: "19475ce4-44c9-41e2-b1f6-5dc73d58cf36"
+          endpoint-url: "https://api.testsprite.com:11443"
+          allow-partial: "false"
+      - name: Assert the guard fired (action should have failed)
+        run: |
+          echo "action outcome: ${{ steps.run.outcome }}"
+          if [ "${{ steps.run.outcome }}" != "failure" ]; then
+            echo "::error::Expected the action to FAIL (FE skipped, allow-partial=false), but it did not."
+            exit 1
+          fi
+          echo "OK — partial-run guard fired as expected."
+
+  # allow-partial=true: same skip, but the job stays green (warning only).
+  v2-allow-partial:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: run
+        uses: ./
+        with:
+          api-key: ${{ secrets.TESTSPRITE_API_KEY_V2 }}
+          project: "19475ce4-44c9-41e2-b1f6-5dc73d58cf36"
+          endpoint-url: "https://api.testsprite.com:11443"
+          allow-partial: "true"
+      - name: Show outputs
+        run: |
+          echo "passed=${{ steps.run.outputs.passed }} failed=${{ steps.run.outputs.failed }} total=${{ steps.run.outputs.total }}"
+          echo "junit=${{ steps.run.outputs.junit-file }}"
