@@ -162,9 +162,9 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
         # Partial-run guard (full-project runs only): skipped tests (e.g. frontend
-        # tests on the V2 path) do NOT affect the CLI exit code, so a partial
-        # batch can exit 0. Detect them from the envelope and fail unless
-        # allow-partial is set.
+        # tests on the V2 path) are invisible to a pass/fail count, so a batch
+        # that skipped everything can look clean. Detect them from the envelope
+        # and fail unless allow-partial is set.
         if [ -z "$INPUT_TEST_ID" ]; then
           skipped=$(jq -r '((.skippedFrontend // []) + (.skippedIntegration // [])) | length' "$envjson" 2>/dev/null || echo 0)
           if [ "${skipped:-0}" -gt 0 ]; then
@@ -174,6 +174,16 @@ runs:
               exit 1
             fi
           fi
+        fi
+
+        # Final verdict. Under allow-partial (full-project runs), a batch that only
+        # skipped/deferred tests still exits NON-ZERO from the CLI — a fully
+        # frontend-only V2 project dispatches nothing and the CLI exits 7
+        # (incomplete). Accept that as GREEN, reddening only on a real test
+        # failure; otherwise allow-partial can't actually make a skipped run pass.
+        if [ "$INPUT_ALLOW_PARTIAL" = "true" ] && [ -z "$INPUT_TEST_ID" ]; then
+          [ "${failed:-0}" -gt 0 ] && exit 1
+          exit 0
         fi
 
         exit "$code"
