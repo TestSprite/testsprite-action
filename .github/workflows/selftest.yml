@@ -4,8 +4,11 @@
 # execution, no credits).
 name: selftest
 
+# Real-backend jobs run only on main + ci/** (not every feature branch), so an
+# unrelated commit doesn't fire dev-backend runs (dev-uptime/rate-limit noise).
 on:
   push:
+    branches: [main, "ci/**"]
   workflow_dispatch:
 
 jobs:
@@ -25,14 +28,21 @@ jobs:
           project: ${{ secrets.TESTSPRITE_V2_PROJECT }}
           endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
           allow-partial: "false"
-      - name: Assert the guard fired (action should have failed)
+      - name: Assert the guard fired (action should have failed ON SKIPPED TESTS)
         run: |
-          echo "action outcome: ${{ steps.run.outcome }}"
+          echo "action outcome: ${{ steps.run.outcome }}  skipped: ${{ steps.run.outputs.skipped }}"
           if [ "${{ steps.run.outcome }}" != "failure" ]; then
             echo "::error::Expected the action to FAIL (FE skipped, allow-partial=false), but it did not."
             exit 1
           fi
-          echo "OK — partial-run guard fired as expected."
+          # Distinguish "the partial-run guard fired" from "the action broke for an
+          # UNRELATED reason (CLI crash, bad key, dev down)" — outcome==failure
+          # alone can't. The guard only fires when tests were actually skipped.
+          if [ -z "${{ steps.run.outputs.skipped }}" ] || [ "${{ steps.run.outputs.skipped }}" = "0" ]; then
+            echo "::error::Action failed but skipped=${{ steps.run.outputs.skipped }} — it did NOT fail via the partial-run guard (something else broke)."
+            exit 1
+          fi
+          echo "OK — partial-run guard fired (skipped=${{ steps.run.outputs.skipped }})."
 
   # allow-partial=true: same skip, but the job stays green (warning only).
   v2-allow-partial:
@@ -47,10 +57,19 @@ jobs:
           project: ${{ secrets.TESTSPRITE_V2_PROJECT }}
           endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
           allow-partial: "true"
-      - name: Show outputs
+      - name: Assert the V2-skip premise held (no browser execution / no credits)
         run: |
-          echo "passed=${{ steps.run.outputs.passed }} failed=${{ steps.run.outputs.failed }} total=${{ steps.run.outputs.total }}"
+          echo "skipped=${{ steps.run.outputs.skipped }} passed=${{ steps.run.outputs.passed }} failed=${{ steps.run.outputs.failed }} total=${{ steps.run.outputs.total }}"
           echo "junit=${{ steps.run.outputs.junit-file }}"
+          # This scenario relies on the V2 account SKIPPING FE tests (no execution,
+          # no credits). skipped=0 means the account likely no longer runs on V2
+          # (FE now executes + costs credits) — fail LOUDLY instead of silently
+          # burning credits on every push. Doubles as an account-drift tripwire.
+          if [ -z "${{ steps.run.outputs.skipped }}" ] || [ "${{ steps.run.outputs.skipped }}" = "0" ]; then
+            echo "::error::Expected FE tests SKIPPED on the V2 account (skipped>0), got skipped=${{ steps.run.outputs.skipped }}. The test account may have been flipped to V3 (tests now execute + cost credits) — check featureFlags.v3."
+            exit 1
+          fi
+          echo "OK — FE skipped on V2 as expected; no execution, no credits."
 
   # Real-user shape: reference the action REMOTELY by ref (what a consumer's
   # workflow does), NOT `./`. No checkout, no continue-on-error, no assert — just

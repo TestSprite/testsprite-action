@@ -76,11 +76,14 @@ outputs:
     description: "Number of tests that passed."
     value: ${{ steps.run.outputs.passed }}
   failed:
-    description: "Number of tests that did not pass."
+    description: "Number of tests that failed to a verdict (failed/blocked) — not deferred/skipped."
     value: ${{ steps.run.outputs.failed }}
   total:
     description: "Total tests in the summary."
     value: ${{ steps.run.outputs.total }}
+  skipped:
+    description: "Tests skipped and not run (full-project runs; 0 in single-test mode)."
+    value: ${{ steps.run.outputs.skipped }}
 
 runs:
   using: "composite"
@@ -117,16 +120,15 @@ runs:
         fi
         summary="$(mktemp)"
         envjson="$(mktemp)"
-        passed=0; failed=0; total=0
+        passed=0; failed=0; total=0; skipped=0
 
         # --output json puts the machine envelope on stdout (captured here) and
         # routes CLI annotations to stderr (shown in the log + parsed by Actions).
         if [ -n "$INPUT_TEST_ID" ]; then
           # Single test by id. The CLI's JUnit report is batch-only, so there is
-          # no report here; the verdict comes from the run envelope's status and
-          # the non-zero exit reds the job. The CLI emits the ::error annotation
-          # itself under GITHUB_ACTIONS on a CLI version with single-test CI
-          # output (DEV-772); older versions just red/green without an annotation.
+          # no report here; the verdict comes from the run envelope's status. The
+          # CLI emits the ::error annotation itself under GITHUB_ACTIONS on a CLI
+          # version with single-test CI output; older versions just red/green.
           args=(test run "$INPUT_TEST_ID" --wait --output json --timeout "$INPUT_TIMEOUT")
           if [ -n "$INPUT_TARGET_URL" ]; then args+=(--target-url "$INPUT_TARGET_URL"); fi
           set +e; testsprite "${args[@]}" > "$envjson"; code=$?; set -e
@@ -150,39 +152,55 @@ runs:
           set +e; testsprite "${args[@]}" > "$envjson"; code=$?; set -e
           if [ -s "$summary" ]; then
             passed=$(jq -r '.passed // 0' "$summary" 2>/dev/null || echo 0)
-            failed=$(jq -r '.failed // 0' "$summary" 2>/dev/null || echo 0)
             total=$(jq -r '.total  // 0' "$summary" 2>/dev/null || echo 0)
+            # `failed` = tests that ran to a FAILING verdict (failed/blocked),
+            # counted from runs[].status — NOT the summary's `failed`, which folds
+            # in deferred / conflict / not-found (partials, not failures) and would
+            # red an allow-partial run that merely couldn't dispatch everything.
+            failed=$(jq -r '[.runs[]? | select(.status == "failed" or .status == "blocked")] | length' "$summary" 2>/dev/null || echo 0)
           fi
+          # Skipped (frontend-on-V2 etc.) live on the raw envelope, not the summary.
+          skipped=$(jq -r '((.skippedFrontend // []) + (.skippedIntegration // [])) | length' "$envjson" 2>/dev/null || echo 0)
         fi
 
         {
           echo "passed=$passed"
           echo "failed=$failed"
           echo "total=$total"
+          echo "skipped=$skipped"
         } >> "$GITHUB_OUTPUT"
 
-        # Partial-run guard (full-project runs only): skipped tests (e.g. frontend
-        # tests on the V2 path) are invisible to a pass/fail count, so a batch
-        # that skipped everything can look clean. Detect them from the envelope
-        # and fail unless allow-partial is set.
-        if [ -z "$INPUT_TEST_ID" ]; then
-          skipped=$(jq -r '((.skippedFrontend // []) + (.skippedIntegration // [])) | length' "$envjson" 2>/dev/null || echo 0)
-          if [ "${skipped:-0}" -gt 0 ]; then
-            echo "::warning title=TestSprite::${skipped} test(s) were skipped and did not run (e.g. frontend tests on the V2 execution path)."
-            if [ "$INPUT_ALLOW_PARTIAL" != "true" ]; then
-              echo "::error title=TestSprite::${skipped} test(s) skipped — failing the job. Set allow-partial: true to accept partial runs, or use a V3 project / test list for full coverage."
-              exit 1
-            fi
+        # Partial-run guard (full-project runs only): skipped tests are invisible
+        # to a pass/fail count, so a batch that skipped everything can look clean.
+        # Fail unless allow-partial is set.
+        if [ -z "$INPUT_TEST_ID" ] && [ "${skipped:-0}" -gt 0 ]; then
+          echo "::warning title=TestSprite::${skipped} test(s) were skipped and did not run (e.g. frontend tests on the V2 execution path)."
+          if [ "$INPUT_ALLOW_PARTIAL" != "true" ]; then
+            echo "::error title=TestSprite::${skipped} test(s) skipped — failing the job. Set allow-partial: true to accept partial runs, or use a V3 project / test list for full coverage."
+            exit 1
           fi
         fi
 
-        # Final verdict. Under allow-partial (full-project runs), a batch that only
-        # skipped/deferred tests still exits NON-ZERO from the CLI — a fully
-        # frontend-only V2 project dispatches nothing and the CLI exits 7
-        # (incomplete). Accept that as GREEN, reddening only on a real test
-        # failure; otherwise allow-partial can't actually make a skipped run pass.
-        if [ "$INPUT_ALLOW_PARTIAL" = "true" ] && [ -z "$INPUT_TEST_ID" ]; then
-          [ "${failed:-0}" -gt 0 ] && exit 1
+        # Single-test verdict — green iff the test passed. Derived from the status
+        # (authoritative, matches the outputs above), not the CLI exit code alone,
+        # so a blocked/timeout single test can't leave the job green while the
+        # `failed` output is 1.
+        if [ -n "$INPUT_TEST_ID" ]; then
+          [ "$status" = "passed" ] && exit 0
+          echo "::error title=TestSprite::single test ${INPUT_TEST_ID} did not pass (status: ${status})."
+          exit 1
+        fi
+
+        # Full-project verdict under allow-partial: red ONLY on a real test failure
+        # (failed/blocked, from runs[].status above). A skipped/deferred-only batch
+        # that reached no failing verdict is accepted as GREEN — but if NOTHING ran
+        # to a verdict (all skipped/deferred), say so loudly so a mis-scoped run
+        # isn't a silent green.
+        if [ "$INPUT_ALLOW_PARTIAL" = "true" ]; then
+          if [ "${failed:-0}" -gt 0 ]; then exit 1; fi
+          if [ "$((passed + failed))" -eq 0 ]; then
+            echo "::warning title=TestSprite::allow-partial: no tests executed to a verdict (all skipped/deferred) — the job is green but nothing was verified."
+          fi
           exit 0
         fi
 
