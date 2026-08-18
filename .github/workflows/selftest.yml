@@ -22,8 +22,8 @@ jobs:
         uses: ./
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY_V2 }}
-          project: "19475ce4-44c9-41e2-b1f6-5dc73d58cf36"
-          endpoint-url: "https://api.testsprite.com:11443"
+          project: ${{ secrets.TESTSPRITE_V2_PROJECT }}
+          endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
           allow-partial: "false"
       - name: Assert the guard fired (action should have failed)
         run: |
@@ -44,8 +44,8 @@ jobs:
         uses: ./
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY_V2 }}
-          project: "19475ce4-44c9-41e2-b1f6-5dc73d58cf36"
-          endpoint-url: "https://api.testsprite.com:11443"
+          project: ${{ secrets.TESTSPRITE_V2_PROJECT }}
+          endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
           allow-partial: "true"
       - name: Show outputs
         run: |
@@ -69,8 +69,8 @@ jobs:
       - uses: TestSprite/testsprite-action@main
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY_V2 }}
-          project: "19475ce4-44c9-41e2-b1f6-5dc73d58cf36"
-          endpoint-url: "https://api.testsprite.com:11443"
+          project: ${{ secrets.TESTSPRITE_V2_PROJECT }}
+          endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
           allow-partial: "true"
 
   # V3 real execution: a V3 project runs frontend tests natively, so this
@@ -89,9 +89,9 @@ jobs:
         uses: ./
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY_V3 }}
-          project: "90048e9c-4de3-4266-bee5-5d722df101b4"
+          project: ${{ secrets.TESTSPRITE_V3_PROJECT }}
           filter: "price filtering"
-          endpoint-url: "https://api.testsprite.com:11443"
+          endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
           report-file: "results/junit.xml"
       - name: Verify a JUnit report with real test cases was produced
         run: |
@@ -116,8 +116,8 @@ jobs:
         uses: ./
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY_V3 }}
-          test-id: "46872b89-f74f-4443-8fe6-36a93cdb0dc2"
-          endpoint-url: "https://api.testsprite.com:11443"
+          test-id: ${{ secrets.TESTSPRITE_V3_TEST_ID }}
+          endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
       - name: Verify single-test verdict + outputs
         run: |
           echo "outcome=${{ steps.run.outcome }} passed=${{ steps.run.outputs.passed }} failed=${{ steps.run.outputs.failed }} total=${{ steps.run.outputs.total }} junit-file='${{ steps.run.outputs.junit-file }}'"
