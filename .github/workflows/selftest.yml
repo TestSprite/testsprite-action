@@ -8,7 +8,7 @@ name: selftest
 # unrelated commit doesn't fire dev-backend runs (dev-uptime/rate-limit noise).
 on:
   push:
-    branches: [main, "ci/**"]
+    branches: [main, dev, "ci/**"]
   workflow_dispatch:
 
 jobs:
