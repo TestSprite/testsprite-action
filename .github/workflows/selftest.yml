@@ -108,7 +108,7 @@ jobs:
         uses: ./
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY_V3 }}
-          project: ${{ secrets.TESTSPRITE_V3_PROJECT }}
+          project: "f01fd7ee-91ba-465e-bce6-2cb1dc14346d"
           filter: "Sign in from the login page"
           endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
           report-file: "results/junit.xml"
@@ -135,7 +135,7 @@ jobs:
         uses: ./
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY_V3 }}
-          test-id: ${{ secrets.TESTSPRITE_V3_TEST_ID }}
+          test-id: "dd0b3be0-ba8b-4e0f-9dd9-61ad38a45b3a"
           endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
       - name: Verify single-test verdict + outputs
         run: |
