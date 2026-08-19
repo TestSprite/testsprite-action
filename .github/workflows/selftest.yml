@@ -109,7 +109,7 @@ jobs:
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY_V3 }}
           project: ${{ secrets.TESTSPRITE_V3_PROJECT }}
-          filter: "price filtering"
+          filter: "Sign in from the login page"
           endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
           report-file: "results/junit.xml"
       - name: Verify a JUnit report with real test cases was produced
