@@ -43,8 +43,9 @@ pass — or if tests were skipped (see [`allow-partial`](#partial-runs)).
 | ----------------- | -------------------- | --------------------------------------------------------------------------- |
 | `api-key`         | — (required)         | TestSprite API key. Pass a secret.                                          |
 | `project`         | `""`                 | Project id. If empty, `TESTSPRITE_PROJECT_ID` must be set.                  |
-| `filter`          | `""`                 | Only run tests whose name contains this substring.                          |
-| `target-url`      | `""`                 | Target URL override (V2 path only; ignored on V3).                          |
+| `test-id`         | `""`                 | Run a single test by id (whole-project run otherwise). `project` ignored; `filter` must NOT be set (mutually exclusive — fails fast if both given); no JUnit (batch-only). |
+| `filter`          | `""`                 | Only run tests whose name contains this substring. Full-project run only; mutually exclusive with `test-id`. |
+| `target-url`      | `""`                 | Target URL override. **Single-test (`test-id`) runs only** — the CLI rejects it on a full-project run, so setting it without `test-id` fails fast. |
 | `report-file`     | `testsprite-junit.xml` | JUnit XML path.                                                           |
 | `cli-version`     | `latest`             | npm version/dist-tag of `@testsprite/testsprite-cli`.                       |
 | `allow-partial`   | `false`              | If false, fail the job when tests are skipped (see below).                  |
@@ -52,15 +53,19 @@ pass — or if tests were skipped (see [`allow-partial`](#partial-runs)).
 | `endpoint-url`    | `""`                 | API base URL override.                                                      |
 | `node-version`    | `lts/*`              | Node version used to install/run the CLI.                                   |
 | `upload-artifact` | `true`               | Upload the JUnit report as a workflow artifact.                             |
+| `artifact-name`   | `testsprite-junit`   | Name of the uploaded JUnit artifact. Give each a **unique** name when the action runs more than once (matrix / multiple projects) in one workflow — `upload-artifact@v4` fails on duplicate names. |
 
 ## Outputs
 
-| Output       | Description                        |
-| ------------ | ---------------------------------- |
-| `junit-file` | Path to the JUnit report.          |
-| `passed`     | Number of tests that passed.       |
-| `failed`     | Number of tests that did not pass. |
-| `total`      | Total tests in the summary.        |
+| Output       | Description                                                                                                                              |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `junit-file` | Path to the JUnit report (empty in single-test mode — JUnit is batch-only).                                                              |
+| `passed`     | Number of tests that passed.                                                                                                             |
+| `failed`     | Number of tests that ran to a **failing verdict** (`failed`/`blocked`) — not deferred, conflicted, or skipped.                           |
+| `total`      | Total tests in the summary.                                                                                                              |
+| `skipped`    | Tests skipped and not run (full-project runs, e.g. frontend tests on the V2 path; `0` in single-test mode).                             |
+| `timed-out`  | Tests that ran but did **not** reach a verdict within `timeout` (status `timeout`). Counted separately from `failed`; under `allow-partial: true` these still fail the job. |
+| `error-code` | The CLI's API-layer error code when the run failed **before** a verdict (e.g. `AUTH_INVALID`, `NOT_FOUND`, `UNAVAILABLE`); empty otherwise. |
 
 ## CI-native output
 

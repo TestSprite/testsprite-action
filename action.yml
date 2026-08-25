@@ -12,18 +12,29 @@ branding:
 
 inputs:
   api-key:
-    description: "TestSprite API key. Pass a secret, e.g. ${{ secrets.TESTSPRITE_API_KEY }}."
+    description: "TestSprite API key. Store it as an encrypted repository secret and pass it here."
     required: true
   project:
     description: "Project id to run. If empty, TESTSPRITE_PROJECT_ID must be set in the env."
     required: false
     default: ""
+  test-id:
+    description: >
+      Run a single test by id instead of the whole project. When set, `project`
+      is ignored and `filter` must NOT be set (test-id and filter are mutually
+      exclusive — the action fails fast if both are given). No JUnit report is
+      produced (the CLI's JUnit report is batch-only); the job still goes
+      red/green on the verdict and emits a summary + annotation.
+    required: false
+    default: ""
   filter:
-    description: "Only run tests whose name contains this substring (case-insensitive)."
+    description: >
+      Only run tests whose name contains this substring (case-insensitive).
+      Applies to the full-project run only; mutually exclusive with test-id.
     required: false
     default: ""
   target-url:
-    description: "Optional target URL override (applied on the V2 path; ignored on V3)."
+    description: "Optional target URL override. Single-test (test-id) runs only — the CLI rejects it on a full-project run, so setting it without test-id fails fast."
     required: false
     default: ""
   report-file:
@@ -57,20 +68,33 @@ inputs:
     description: "Upload the JUnit report as a workflow artifact."
     required: false
     default: "true"
+  artifact-name:
+    description: "Name of the uploaded JUnit artifact. actions/upload-artifact@v4 fails on a duplicate name within one workflow run, so give each a UNIQUE name when this action runs more than once (a matrix, or several projects) in the same workflow."
+    required: false
+    default: "testsprite-junit"
 
 outputs:
   junit-file:
-    description: "Path to the JUnit report."
-    value: ${{ inputs.report-file }}
+    description: "Path to the JUnit report (empty in single-test mode — JUnit is batch-only)."
+    value: ${{ inputs.test-id == '' && inputs.report-file || '' }}
   passed:
     description: "Number of tests that passed."
     value: ${{ steps.run.outputs.passed }}
   failed:
-    description: "Number of tests that did not pass."
+    description: "Number of tests that failed to a verdict (failed/blocked) — not deferred/skipped."
     value: ${{ steps.run.outputs.failed }}
   total:
     description: "Total tests in the summary."
     value: ${{ steps.run.outputs.total }}
+  skipped:
+    description: "Tests skipped and not run (full-project runs; 0 in single-test mode)."
+    value: ${{ steps.run.outputs.skipped }}
+  timed-out:
+    description: "Tests that ran but did not reach a verdict within `timeout` (status 'timeout'). Counted separately from `failed`; under allow-partial these still fail the job."
+    value: ${{ steps.run.outputs.timed-out }}
+  error-code:
+    description: "The CLI's API-layer error code when the run failed BEFORE a verdict (e.g. AUTH_INVALID, NOT_FOUND, VALIDATION_ERROR, UNAVAILABLE, RATE_LIMITED); empty on a dispatched run. Lets a caller tell a transient/infra failure from a real test failure."
+    value: ${{ steps.run.outputs.error-code }}
 
 runs:
   using: "composite"
@@ -82,7 +106,10 @@ runs:
 
     - name: Install testsprite CLI
       shell: bash
-      run: npm install -g @testsprite/testsprite-cli@${{ inputs.cli-version }}
+      env:
+        # Via env, not interpolated into the command, so the value can't inject shell.
+        INPUT_CLI_VERSION: ${{ inputs.cli-version }}
+      run: npm install -g "@testsprite/testsprite-cli@${INPUT_CLI_VERSION}"
 
     - name: Run TestSprite tests
       id: run
@@ -94,50 +121,127 @@ runs:
         TESTSPRITE_API_URL: ${{ inputs.endpoint-url }}
         TESTSPRITE_PROJECT_ID: ${{ inputs.project }}
         INPUT_REPORT_FILE: ${{ inputs.report-file }}
+        INPUT_TEST_ID: ${{ inputs.test-id }}
         INPUT_FILTER: ${{ inputs.filter }}
         INPUT_TARGET_URL: ${{ inputs.target-url }}
         INPUT_TIMEOUT: ${{ inputs.timeout }}
         INPUT_ALLOW_PARTIAL: ${{ inputs.allow-partial }}
       run: |
         set -uo pipefail
-        report="$INPUT_REPORT_FILE"
+
+        # Emit zero-valued outputs on an early validation exit so a consumer reading
+        # e.g. steps.run.outputs.total gets `0`, not an empty string.
+        emit_zero_outputs() {
+          {
+            echo "passed=0"; echo "failed=0"; echo "total=0"; echo "skipped=0"
+            echo "timed-out=0"
+            # error-code is the CLI's API-layer error code, not this action's own
+            # input rejections — leave it empty here so a consumer can't mistake a
+            # local validation refusal for a CLI/API error.
+            echo "error-code="
+          } >> "$GITHUB_OUTPUT"
+        }
+
+        # target-url is single-test only: the published CLI rejects `--target-url`
+        # together with `--all` (VALIDATION_ERROR / exit 5), so on the full-project
+        # path it would ALWAYS fail with a CLI-internal message about a flag the
+        # consumer never typed. Reject it here with a clear one instead.
+        if [ -n "$INPUT_TARGET_URL" ] && [ -z "$INPUT_TEST_ID" ]; then
+          emit_zero_outputs
+          echo "::error title=TestSprite::target-url applies to a single-test run only (the CLI rejects --target-url with --all). Set test-id, or remove target-url."
+          exit 1
+        fi
+        if [ -n "$INPUT_TEST_ID" ] && [ -n "$INPUT_FILTER" ]; then
+          emit_zero_outputs
+          echo "::error title=TestSprite::test-id and filter are mutually exclusive (filter only applies to a full-project run)."
+          exit 1
+        fi
+
         summary="$(mktemp)"
         envjson="$(mktemp)"
+        errfile="$(mktemp)"
+        passed=0; failed=0; total=0; skipped=0; timed_out=0; error_code=""
 
-        # --gh-output auto-enables under GITHUB_ACTIONS=true, so ::error::
-        # annotations + the $GITHUB_STEP_SUMMARY table are emitted for free.
-        # --output json puts the machine envelope on stdout (captured here) and
-        # routes annotations to stderr (shown in the log + parsed by Actions).
-        args=(test run --all --wait --output json
-              --report junit --report-file "$report"
-              --summary-file "$summary"
-              --timeout "$INPUT_TIMEOUT")
-        if [ -n "$INPUT_FILTER" ]; then args+=(--filter "$INPUT_FILTER"); fi
-        if [ -n "$INPUT_TARGET_URL" ]; then args+=(--target-url "$INPUT_TARGET_URL"); fi
+        # --output json puts the machine run envelope on stdout (captured here); CLI
+        # annotations AND the API-error envelope go to stderr. We need stderr BOTH
+        # live (so a cancelled/killed step still shows what streamed) AND captured to
+        # a file (to parse the API-error envelope). A background `tee` reading a fifo
+        # gives both: the CLI's stderr → fifo → tee → $errfile + the terminal, in
+        # real time. `wait "$tee_pid"` after the run makes the file read deterministic
+        # (bash does not reap a process substitution, so a plain `2> >(tee …)` would
+        # race the parse below). Only one of the two branches runs, so one tee suffices.
+        # mktemp -d (not -u): create the dir, then name the fifo inside it — avoids the
+        # name-then-create TOCTOU a bare `mktemp -u` has.
+        tmpd="$(mktemp -d)"; runlog="$tmpd/stderr"; mkfifo "$runlog"
+        tee "$errfile" < "$runlog" >&2 &
+        tee_pid=$!
 
-        set +e
-        testsprite "${args[@]}" > "$envjson"
-        code=$?
-        set -e
+        if [ -n "$INPUT_TEST_ID" ]; then
+          # Single test by id. Write a --summary-file too (the CLI supports it for a
+          # single `test run <id> --wait`): the counts then come from a real
+          # artifact, so a crash / auth / network failure that writes no summary
+          # leaves total=0 — distinguishable from a real run's total=1. JUnit stays
+          # batch-only, so no --report here.
+          args=(test run "$INPUT_TEST_ID" --wait --output json --summary-file "$summary" --timeout "$INPUT_TIMEOUT")
+          if [ -n "$INPUT_TARGET_URL" ]; then args+=(--target-url "$INPUT_TARGET_URL"); fi
+          set +e; testsprite "${args[@]}" > "$envjson" 2> "$runlog"; code=$?; set -e
+          status=$(jq -r '.status // "unknown"' "$envjson" 2>/dev/null || echo unknown)
+        else
+          # Whole project (optionally name-filtered), with a JUnit report.
+          # --gh-output auto-enables under GITHUB_ACTIONS=true, so ::error::
+          # annotations + the $GITHUB_STEP_SUMMARY table are emitted for free.
+          report="$INPUT_REPORT_FILE"
+          # The CLI requires the report's parent dir to exist; create it so a
+          # nested report-file path (e.g. results/junit.xml) doesn't fail.
+          mkdir -p "$(dirname "$report")"
+          args=(test run --all --wait --output json
+                --report junit --report-file "$report"
+                --summary-file "$summary"
+                --timeout "$INPUT_TIMEOUT")
+          if [ -n "$INPUT_FILTER" ]; then args+=(--filter "$INPUT_FILTER"); fi
+          set +e; testsprite "${args[@]}" > "$envjson" 2> "$runlog"; code=$?; set -e
+          # Skipped (frontend-on-V2 etc.) live on the raw envelope, not the summary.
+          skipped=$(jq -r '((.skippedFrontend // []) + (.skippedIntegration // [])) | length' "$envjson" 2>/dev/null || echo 0)
+        fi
 
-        # Counts from the machine summary (best-effort).
-        passed=0; failed=0; total=0
+        # Close the fifo write end (both branches are done) and reap tee, so $errfile
+        # is fully flushed before it is parsed below. `|| true` because the composite
+        # shell runs with `-e` (GitHub's default `bash -eo pipefail`): a non-zero tee
+        # must not kill the step BEFORE $GITHUB_OUTPUT is written and a verdict reached.
+        wait "$tee_pid" || true; rm -rf "$tmpd"
+
+        # Counts from the summary artifact (both paths). `passed`/`total` are the
+        # CLI's; `failed` = FAILING verdicts only (failed/blocked from runs[].status)
+        # — NOT the summary's `failed`, which folds in deferred/conflict/not-found
+        # (partials, not failures). No summary written ⇒ counts stay 0 (a crash).
         if [ -s "$summary" ]; then
           passed=$(jq -r '.passed // 0' "$summary" 2>/dev/null || echo 0)
-          failed=$(jq -r '.failed // 0' "$summary" 2>/dev/null || echo 0)
-          total=$(jq -r '.total  // 0' "$summary" 2>/dev/null || echo 0)
+          total=$(jq -r '.total // 0' "$summary" 2>/dev/null || echo 0)
+          failed=$(jq -r '[.runs[]? | select(.status == "failed" or .status == "blocked")] | length' "$summary" 2>/dev/null || echo 0)
+          # Timed-out runs carry status "timeout" (NOT counted in `failed` above) and
+          # come back on CLI exit 7 — which allow-partial otherwise treats as an
+          # accepted partial. Surface the count so the verdict below can red it.
+          timed_out=$(jq -r '.timedOut // 0' "$summary" 2>/dev/null || echo 0)
         fi
+        # error-code = the CLI's API-layer error code when the run failed BEFORE a
+        # verdict. Its JSON envelope is on stderr under --output json (stdout carries
+        # the run envelope, empty on such a failure), preceded by the idempotency-key
+        # line — so slice from the first line-leading `{` before parsing.
+        error_code=$(sed -n '/^{/,$p' "$errfile" | jq -r '.error.code // ""' 2>/dev/null || echo "")
+
         {
           echo "passed=$passed"
           echo "failed=$failed"
           echo "total=$total"
+          echo "skipped=$skipped"
+          echo "timed-out=$timed_out"
+          echo "error-code=$error_code"
         } >> "$GITHUB_OUTPUT"
 
-        # Partial-run guard: skipped tests (e.g. frontend tests on the V2 path)
-        # do NOT affect the CLI exit code, so a partial batch can exit 0. Detect
-        # them from the raw envelope and fail unless allow-partial is set.
-        skipped=$(jq -r '((.skippedFrontend // []) + (.skippedIntegration // [])) | length' "$envjson" 2>/dev/null || echo 0)
-        if [ "${skipped:-0}" -gt 0 ]; then
+        # Partial-run guard (full-project runs only): skipped tests are invisible
+        # to a pass/fail count, so a batch that skipped everything can look clean.
+        # Fail unless allow-partial is set.
+        if [ -z "$INPUT_TEST_ID" ] && [ "${skipped:-0}" -gt 0 ]; then
           echo "::warning title=TestSprite::${skipped} test(s) were skipped and did not run (e.g. frontend tests on the V2 execution path)."
           if [ "$INPUT_ALLOW_PARTIAL" != "true" ]; then
             echo "::error title=TestSprite::${skipped} test(s) skipped — failing the job. Set allow-partial: true to accept partial runs, or use a V3 project / test list for full coverage."
@@ -145,12 +249,77 @@ runs:
           fi
         fi
 
+        # Single-test verdict — green iff the test passed AND the CLI exited 0.
+        # Requiring BOTH signals is the same rule as the allow-partial branch
+        # below: a `passed` status with a non-zero exit is a post-verdict failure
+        # (cleanup / upload / network), not a pass — never green a broken run.
+        if [ -n "$INPUT_TEST_ID" ]; then
+          if [ "$status" = "passed" ] && [ "$code" -eq 0 ]; then exit 0; fi
+          echo "::error title=TestSprite::single test ${INPUT_TEST_ID} did not pass (status: ${status}, exit: ${code})."
+          exit 1
+        fi
+
+        # Zero-scope guard (BOTH strict and allow-partial). A clean exit that ran
+        # NOTHING — a zero-match --filter, or a project with no tests — is a false
+        # green in a CI gate, and allow-partial is about accepting a PARTIAL run, not
+        # an EMPTY one: red it either way so a typo'd filter or a mis-scoped run isn't
+        # a silent pass. (skipped>0 is a different case, handled by the guard above;
+        # a non-zero exit means something was attempted, so it's not zero-scope.)
+        if [ "$code" -eq 0 ] && [ "${total:-0}" -eq 0 ] && [ "${skipped:-0}" -eq 0 ]; then
+          echo "::error title=TestSprite::no tests ran (a --filter that matched nothing, or a project with no tests). Failing so a mis-scoped run isn't a silent green."
+          exit 1
+        fi
+
+        # Full-project verdict under allow-partial: green a PARTIAL run (skips /
+        # rate-deferred / all-conflict), red a real failure or a crash.
+        if [ "$INPUT_ALLOW_PARTIAL" = "true" ]; then
+          if [ "${failed:-0}" -gt 0 ]; then exit 1; fi
+          # A timed-out run is NOT a partial dispatch — the case ran and never
+          # reached a verdict, so its result is unknown, not deferred. allow-partial
+          # must red it (otherwise, since a timeout exits 7 and is excluded from the
+          # crash gate below, ANY batch with a timed-out run would go green).
+          if [ "${timed_out:-0}" -gt 0 ]; then
+            echo "::error title=TestSprite::${timed_out} run(s) did not reach a verdict within ${INPUT_TIMEOUT}s. Raise timeout, or poll later with test wait <run-id>."
+            exit 1
+          fi
+          # The timed_out check above can only red a timeout the summary RECORDED.
+          # exit 7 means "rate-deferred OR timed out"; the summary is how we tell them
+          # apart. If the CLI exited 7 but wrote NO summary (emitCiArtifacts warns and
+          # continues if --summary-file can't be written — timed_out would then read 0),
+          # the outcome is indeterminate: fail closed rather than green a possibly
+          # timed-out batch. (Scoped to 7 only — exit 6 is all-conflict, which throws
+          # before any run reaches a timeout, so it has nothing to hide.)
+          if [ "$code" -eq 7 ] && [ ! -s "$summary" ]; then
+            echo "::error title=TestSprite::allow-partial: CLI exited 7 (rate-deferred or timed out) but wrote no summary — cannot confirm no run timed out. Failing."
+            exit 7
+          fi
+          # exit 6 (nothing dispatched — every case already in flight) and 7
+          # (rate-deferred / timed out) are PARTIAL dispatch, which is exactly what
+          # allow-partial accepts. Any OTHER non-zero exit is a crash / auth /
+          # network / validation error — never green that. (A genuine timeout also
+          # exits 7 but was already red-ed above by the timed_out check.)
+          if [ "$code" -ne 0 ] && [ "$code" -ne 6 ] && [ "$code" -ne 7 ]; then
+            echo "::error title=TestSprite::allow-partial: CLI exited ${code} with no failing verdict — a crash/auth/network/validation error, not a partial run. Failing."
+            exit "$code"
+          fi
+          if [ "$((passed + failed))" -eq 0 ]; then
+            echo "::warning title=TestSprite::allow-partial: no tests executed to a verdict (all skipped/deferred/conflict) — the job is green but nothing was verified."
+          fi
+          exit 0
+        fi
+
+        # Default (strict) path. The zero-scope guard already ran above; here a
+        # non-zero exit (a real failure verdict, crash, auth, or timeout→7) reds the
+        # job, and a clean exit that ran something is a genuine pass.
         exit "$code"
 
     - name: Upload JUnit report
-      if: ${{ always() && inputs.upload-artifact == 'true' && hashFiles(inputs.report-file) != '' }}
+      # Only the full-project run produces a JUnit report. Gate on an empty
+      # test-id so a single-test run never uploads a stale/pre-existing file at
+      # the default report path as if it were this run's result.
+      if: ${{ always() && inputs.test-id == '' && inputs.upload-artifact == 'true' && hashFiles(inputs.report-file) != '' }}
       uses: actions/upload-artifact@v4
       with:
-        name: testsprite-junit
+        name: ${{ inputs.artifact-name }}
         path: ${{ inputs.report-file }}
         if-no-files-found: ignore
