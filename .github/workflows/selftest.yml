@@ -260,3 +260,49 @@ jobs:
           # stale testsprite-junit.xml is present (Codex finding).
           [ -z "$JUNIT" ] || { echo "::error::junit-file should be empty in single-test mode, got '$JUNIT'"; exit 1; }
           echo "OK — single test dispatched, reached a verdict coherent with outcome=$O (passed=$PASSED failed=$FAILED), no stale JUnit advertised."
+
+  # Regression job for the timeout gate (the fix that was silently wrong for two
+  # rounds). A gate nobody has seen go red is not yet a gate — this forces it.
+  # `timeout: 1` + a filter narrowed to ONE V3 test: the run dispatches, the poll
+  # gives up at 1s while the browser test is still running, the CLI exits 7 with
+  # timedOut=1, and the action MUST red. The assertion is timed-out==1 (not just
+  # outcome==failure), so it proves the red came from THIS gate and not a real
+  # failed>0 or a crash. workflow_dispatch-only: it costs one dispatched run's
+  # credits (hence the narrowed filter, same as v3-real-execution).
+  timeout-gate-reds:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: run
+        continue-on-error: true
+        uses: ./
+        with:
+          api-key: ${{ secrets.TESTSPRITE_API_KEY_V3 }}
+          project: "f01fd7ee-91ba-465e-bce6-2cb1dc14346d"
+          filter: "Sign in from the login page"
+          endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
+          allow-partial: "true"
+          timeout: "1"
+      - name: Verify the timeout gate red-ed the batch
+        env:
+          O: ${{ steps.run.outcome }}
+          EC: ${{ steps.run.outputs.error-code }}
+          TO: ${{ steps.run.outputs.timed-out }}
+          FAILED: ${{ steps.run.outputs.failed }}
+        run: |
+          echo "outcome=$O error-code='$EC' timed-out=$TO failed=$FAILED"
+          # A transient backend error means the run never dispatched, so no timeout
+          # could occur — the gate can't be exercised. Skip rather than false-fail.
+          if [ "$EC" = "UNAVAILABLE" ] || [ "$EC" = "RATE_LIMITED" ]; then
+            echo "::warning::transient backend error ($EC) — the run never dispatched, skipping the timeout-gate assertion this run."
+            exit 0
+          fi
+          # The action MUST have red-ed (allow-partial is true, so ONLY the timeout
+          # gate can red this — a passing/deferred/conflict batch would be green).
+          [ "$O" = "failure" ] || { echo "::error::expected the action to RED on a timed-out batch under allow-partial, got outcome=$O"; exit 1; }
+          # ...and the red MUST come from the timeout gate specifically.
+          [ "$TO" = "1" ] || { echo "::error::expected timed-out=1 (the timeout gate fired), got timed-out=$TO — the red came from a different path"; exit 1; }
+          # A real failing verdict reds via failed>0, not this gate; assert it wasn't that.
+          [ "${FAILED:-0}" = "0" ] || { echo "::error::expected failed=0 (a real failure would red via a different path), got failed=$FAILED"; exit 1; }
+          echo "OK — allow-partial red-ed a timed-out batch via the timeout gate (timed-out=1, failed=0)."

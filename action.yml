@@ -170,7 +170,9 @@ runs:
         # real time. `wait "$tee_pid"` after the run makes the file read deterministic
         # (bash does not reap a process substitution, so a plain `2> >(tee …)` would
         # race the parse below). Only one of the two branches runs, so one tee suffices.
-        runlog="$(mktemp -u)"; mkfifo "$runlog"
+        # mktemp -d (not -u): create the dir, then name the fifo inside it — avoids the
+        # name-then-create TOCTOU a bare `mktemp -u` has.
+        tmpd="$(mktemp -d)"; runlog="$tmpd/stderr"; mkfifo "$runlog"
         tee "$errfile" < "$runlog" >&2 &
         tee_pid=$!
 
@@ -203,8 +205,10 @@ runs:
         fi
 
         # Close the fifo write end (both branches are done) and reap tee, so $errfile
-        # is fully flushed before it is parsed below.
-        wait "$tee_pid"; rm -f "$runlog"
+        # is fully flushed before it is parsed below. `|| true` because the composite
+        # shell runs with `-e` (GitHub's default `bash -eo pipefail`): a non-zero tee
+        # must not kill the step BEFORE $GITHUB_OUTPUT is written and a verdict reached.
+        wait "$tee_pid" || true; rm -rf "$tmpd"
 
         # Counts from the summary artifact (both paths). `passed`/`total` are the
         # CLI's; `failed` = FAILING verdicts only (failed/blocked from runs[].status)
@@ -277,6 +281,17 @@ runs:
           if [ "${timed_out:-0}" -gt 0 ]; then
             echo "::error title=TestSprite::${timed_out} run(s) did not reach a verdict within ${INPUT_TIMEOUT}s. Raise timeout, or poll later with test wait <run-id>."
             exit 1
+          fi
+          # The timed_out check above can only red a timeout the summary RECORDED.
+          # exit 7 means "rate-deferred OR timed out"; the summary is how we tell them
+          # apart. If the CLI exited 7 but wrote NO summary (emitCiArtifacts warns and
+          # continues if --summary-file can't be written — timed_out would then read 0),
+          # the outcome is indeterminate: fail closed rather than green a possibly
+          # timed-out batch. (Scoped to 7 only — exit 6 is all-conflict, which throws
+          # before any run reaches a timeout, so it has nothing to hide.)
+          if [ "$code" -eq 7 ] && [ ! -s "$summary" ]; then
+            echo "::error title=TestSprite::allow-partial: CLI exited 7 (rate-deferred or timed out) but wrote no summary — cannot confirm no run timed out. Failing."
+            exit 7
           fi
           # exit 6 (nothing dispatched — every case already in flight) and 7
           # (rate-deferred / timed out) are PARTIAL dispatch, which is exactly what
