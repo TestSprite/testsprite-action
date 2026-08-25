@@ -239,14 +239,24 @@ jobs:
           fi
           # The run must have DISPATCHED (no API-layer error).
           [ -z "$EC" ] || { echo "::error::single test did not run (error: $EC)"; exit 1; }
-          # total==1 is now load-bearing: single-test counts come from the CLI's
-          # --summary-file, which a crash / auth / network failure never writes
-          # (total stays 0). So total==1 means a real run produced a result — NOT
-          # the old unconditional total=1. (Deliberately not a hard passed==1: a
-          # real browser run can flake, and a flaky-RED self-test is worse than one
-          # that proves the single-test path produced a verdict.)
+          # total==1 means a real run wrote a --summary-file (a crash / auth / network
+          # failure never does — total stays 0). But total also counts a `timeout`
+          # status, so it alone doesn't prove a VERDICT was reached...
           [ "$TOTAL" = "1" ] || { echo "::error::expected total=1 (a real single-test run wrote a summary), got $TOTAL"; exit 1; }
+          # ...so passed+failed==1 is the load-bearing one: it proves the run reached
+          # a real pass/fail verdict, not a timeout/unknown that still counts in total.
+          [ "$((PASSED + FAILED))" = "1" ] || { echo "::error::expected exactly one verdict (passed+failed==1), got passed=$PASSED failed=$FAILED — a timeout/unknown status, not a real result."; exit 1; }
+          # And the action's JOB OUTCOME must be coherent with that verdict — the
+          # single-test path's whole contract is verdict → job status. 77b9daa0 is a
+          # stable passing fixture, so a pass MUST green; if the browser flaked to a
+          # real FAIL, that's tolerated but the action MUST then have red-ed.
+          if [ "${PASSED:-0}" = "1" ]; then
+            [ "$O" = "success" ] || { echo "::error::test passed but the action outcome was '$O' (expected success)"; exit 1; }
+          else
+            [ "$O" = "failure" ] || { echo "::error::test failed (failed=$FAILED) but the action outcome was '$O' (expected failure)"; exit 1; }
+            echo "::warning::single-test fixture flaked to a failing verdict this run — the action correctly red-ed."
+          fi
           # junit-file output must be EMPTY in single-test mode even though a
           # stale testsprite-junit.xml is present (Codex finding).
           [ -z "$JUNIT" ] || { echo "::error::junit-file should be empty in single-test mode, got '$JUNIT'"; exit 1; }
-          echo "OK — single test dispatched, reached a coherent verdict (passed=$PASSED failed=$FAILED), no stale JUnit advertised."
+          echo "OK — single test dispatched, reached a verdict coherent with outcome=$O (passed=$PASSED failed=$FAILED), no stale JUnit advertised."

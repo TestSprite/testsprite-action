@@ -43,7 +43,7 @@ pass — or if tests were skipped (see [`allow-partial`](#partial-runs)).
 | ----------------- | -------------------- | --------------------------------------------------------------------------- |
 | `api-key`         | — (required)         | TestSprite API key. Pass a secret.                                          |
 | `project`         | `""`                 | Project id. If empty, `TESTSPRITE_PROJECT_ID` must be set.                  |
-| `test-id`         | `""`                 | Run a single test by id (whole-project run otherwise). `project`/`filter` ignored; no JUnit (batch-only). |
+| `test-id`         | `""`                 | Run a single test by id (whole-project run otherwise). `project` ignored; `filter` must NOT be set (mutually exclusive — fails fast if both given); no JUnit (batch-only). |
 | `filter`          | `""`                 | Only run tests whose name contains this substring. Full-project run only; mutually exclusive with `test-id`. |
 | `target-url`      | `""`                 | Target URL override. **Single-test (`test-id`) runs only** — the CLI rejects it on a full-project run, so setting it without `test-id` fails fast. |
 | `report-file`     | `testsprite-junit.xml` | JUnit XML path.                                                           |
@@ -64,6 +64,7 @@ pass — or if tests were skipped (see [`allow-partial`](#partial-runs)).
 | `failed`     | Number of tests that ran to a **failing verdict** (`failed`/`blocked`) — not deferred, conflicted, or skipped.                           |
 | `total`      | Total tests in the summary.                                                                                                              |
 | `skipped`    | Tests skipped and not run (full-project runs, e.g. frontend tests on the V2 path; `0` in single-test mode).                             |
+| `timed-out`  | Tests that ran but did **not** reach a verdict within `timeout` (status `timeout`). Counted separately from `failed`; under `allow-partial: true` these still fail the job. |
 | `error-code` | The CLI's API-layer error code when the run failed **before** a verdict (e.g. `AUTH_INVALID`, `NOT_FOUND`, `UNAVAILABLE`); empty otherwise. |
 
 ## CI-native output
