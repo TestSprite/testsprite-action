@@ -71,6 +71,40 @@ jobs:
           fi
           echo "OK — FE skipped on V2 as expected; no execution, no credits."
 
+  # allow-partial=true must NOT green a CRASHED run. A broken run (auth / network
+  # / CLI crash) exits non-zero with an empty summary — passed=0, failed=0 — which
+  # the allow-partial branch used to `exit 0` on (green with only a ::warning). A
+  # bogus (well-formed but invalid) key forces exactly that shape: the CLI passes
+  # its client-side format check, reaches the server, and 401s. The action must
+  # RED. Skips never change the CLI exit code, so this can only be a crash.
+  allow-partial-crash-reds:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: run
+        continue-on-error: true
+        uses: ./
+        with:
+          api-key: "sk-user-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          project: ${{ secrets.TESTSPRITE_V2_PROJECT }}
+          endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
+          allow-partial: "true"
+      - name: Assert allow-partial did NOT swallow the crash (action should FAIL)
+        run: |
+          echo "outcome=${{ steps.run.outcome }} skipped=${{ steps.run.outputs.skipped }} passed=${{ steps.run.outputs.passed }} failed=${{ steps.run.outputs.failed }}"
+          if [ "${{ steps.run.outcome }}" != "failure" ]; then
+            echo "::error::allow-partial greened a crashed run (bogus key → CLI non-zero exit, empty summary). The crash-swallow gate did not fire."
+            exit 1
+          fi
+          # A crash is not a skip — the failure must be the crash gate, not the
+          # partial-run guard (which only fires when tests were actually skipped).
+          if [ -n "${{ steps.run.outputs.skipped }}" ] && [ "${{ steps.run.outputs.skipped }}" != "0" ]; then
+            echo "::error::Expected a crash (skipped=0), got skipped=${{ steps.run.outputs.skipped }} — failed via the wrong path."
+            exit 1
+          fi
+          echo "OK — allow-partial reds a crashed run instead of greening it."
+
   # Real-user shape: reference the action REMOTELY by ref (what a consumer's
   # workflow does), NOT `./`. No checkout, no continue-on-error, no assert — just
   # `uses` + api-key + project. This exercises GitHub's action-resolution path

@@ -198,6 +198,13 @@ runs:
         # isn't a silent green.
         if [ "$INPUT_ALLOW_PARTIAL" = "true" ]; then
           if [ "${failed:-0}" -gt 0 ]; then exit 1; fi
+          # A non-zero CLI exit with no failing verdict is a crash / auth / network
+          # error, NOT a skip — skips never change the CLI exit code, so `code != 0`
+          # here can only mean the run broke. Never green a broken pipeline.
+          if [ "$code" -ne 0 ]; then
+            echo "::error title=TestSprite::allow-partial: CLI exited ${code} and no test failed to a verdict — a crash/auth/network error, not a skip. Failing."
+            exit "$code"
+          fi
           if [ "$((passed + failed))" -eq 0 ]; then
             echo "::warning title=TestSprite::allow-partial: no tests executed to a verdict (all skipped/deferred) — the job is green but nothing was verified."
           fi
