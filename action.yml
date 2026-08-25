@@ -181,13 +181,13 @@ runs:
           fi
         fi
 
-        # Single-test verdict — green iff the test passed. Derived from the status
-        # (authoritative, matches the outputs above), not the CLI exit code alone,
-        # so a blocked/timeout single test can't leave the job green while the
-        # `failed` output is 1.
+        # Single-test verdict — green iff the test passed AND the CLI exited 0.
+        # Requiring BOTH signals is the same rule as the allow-partial branch
+        # below: a `passed` status with a non-zero exit is a post-verdict failure
+        # (cleanup / upload / network), not a pass — never green a broken run.
         if [ -n "$INPUT_TEST_ID" ]; then
-          [ "$status" = "passed" ] && exit 0
-          echo "::error title=TestSprite::single test ${INPUT_TEST_ID} did not pass (status: ${status})."
+          if [ "$status" = "passed" ] && [ "$code" -eq 0 ]; then exit 0; fi
+          echo "::error title=TestSprite::single test ${INPUT_TEST_ID} did not pass (status: ${status}, exit: ${code})."
           exit 1
         fi
 

@@ -91,19 +91,31 @@ jobs:
           endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
           allow-partial: "true"
       - name: Assert allow-partial did NOT swallow the crash (action should FAIL)
+        env:
+          O: ${{ steps.run.outcome }}
+          SKIPPED: ${{ steps.run.outputs.skipped }}
+          PASSED: ${{ steps.run.outputs.passed }}
+          FAILED: ${{ steps.run.outputs.failed }}
+          TOTAL: ${{ steps.run.outputs.total }}
         run: |
-          echo "outcome=${{ steps.run.outcome }} skipped=${{ steps.run.outputs.skipped }} passed=${{ steps.run.outputs.passed }} failed=${{ steps.run.outputs.failed }}"
-          if [ "${{ steps.run.outcome }}" != "failure" ]; then
+          echo "outcome=$O skipped=$SKIPPED passed=$PASSED failed=$FAILED total=$TOTAL"
+          if [ "$O" != "failure" ]; then
             echo "::error::allow-partial greened a crashed run (bogus key → CLI non-zero exit, empty summary). The crash-swallow gate did not fire."
             exit 1
           fi
-          # A crash is not a skip — the failure must be the crash gate, not the
-          # partial-run guard (which only fires when tests were actually skipped).
-          if [ -n "${{ steps.run.outputs.skipped }}" ] && [ "${{ steps.run.outputs.skipped }}" != "0" ]; then
-            echo "::error::Expected a crash (skipped=0), got skipped=${{ steps.run.outputs.skipped }} — failed via the wrong path."
+          # Prove the failure came from the CRASH gate, not from a real failed>0
+          # run (which would also make outcome=failure). A crash has the
+          # empty-summary shape: no verdict counted at all. skipped stays 0 too
+          # (a crash is not a skip).
+          if [ "${PASSED:-0}" != "0" ] || [ "${FAILED:-0}" != "0" ] || [ "${TOTAL:-0}" != "0" ]; then
+            echo "::error::Expected the empty-summary crash shape (passed=0 failed=0 total=0), got passed=$PASSED failed=$FAILED total=$TOTAL — the action failed via a real verdict, not the crash gate."
             exit 1
           fi
-          echo "OK — allow-partial reds a crashed run instead of greening it."
+          if [ -n "$SKIPPED" ] && [ "$SKIPPED" != "0" ]; then
+            echo "::error::Expected a crash (skipped=0), got skipped=$SKIPPED — failed via the wrong path."
+            exit 1
+          fi
+          echo "OK — allow-partial reds a crashed run (empty-summary shape) instead of greening it."
 
   # Real-user shape: reference the action REMOTELY by ref (what a consumer's
   # workflow does), NOT `./`. No checkout, no continue-on-error, no assert — just
@@ -169,13 +181,39 @@ jobs:
         uses: ./
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY_V3 }}
-          test-id: "dd0b3be0-ba8b-4e0f-9dd9-61ad38a45b3a"
+          # A stable test in the dedicated FE-fixtures project (a simple
+          # "home page" assertion), not the cal demo — more reliable per run.
+          test-id: "77b9daa0-f3ed-4883-8e26-66055a66d595"
           endpoint-url: ${{ secrets.TESTSPRITE_ENDPOINT_URL }}
       - name: Verify single-test verdict + outputs
+        env:
+          O: ${{ steps.run.outcome }}
+          EC: ${{ steps.run.outputs.error-code }}
+          PASSED: ${{ steps.run.outputs.passed }}
+          FAILED: ${{ steps.run.outputs.failed }}
+          TOTAL: ${{ steps.run.outputs.total }}
+          JUNIT: ${{ steps.run.outputs.junit-file }}
         run: |
-          echo "outcome=${{ steps.run.outcome }} passed=${{ steps.run.outputs.passed }} failed=${{ steps.run.outputs.failed }} total=${{ steps.run.outputs.total }} junit-file='${{ steps.run.outputs.junit-file }}'"
-          test "${{ steps.run.outputs.total }}" = "1" || { echo "::error::expected total=1 for a single test"; exit 1; }
+          echo "outcome=$O error-code='$EC' passed=$PASSED failed=$FAILED total=$TOTAL junit-file='$JUNIT'"
+          # Tolerate a transient backend blip (auth/throttle), same as v3-real.
+          if [ "$EC" = "UNAVAILABLE" ] || [ "$EC" = "RATE_LIMITED" ]; then
+            echo "::warning::transient backend error ($EC) — skipping single-test validation this run."
+            exit 0
+          fi
+          # The run must have DISPATCHED (no API-layer error) — else total=1 is the
+          # hardcoded single-test default, not evidence the test actually ran.
+          [ -z "$EC" ] || { echo "::error::single test did not run (error: $EC)"; exit 1; }
+          [ "$TOTAL" = "1" ] || { echo "::error::expected total=1 for a single test, got $TOTAL"; exit 1; }
+          # And reached a REAL verdict — passed+failed==1. total=1 alone is written
+          # unconditionally, so this is what distinguishes a run that produced a
+          # verdict (pass OR fail) from an unknown/broken run the job would else green.
+          # NOT a hard passed=1: a real browser run can flake, and a flaky RED
+          # self-test is worse than one that proves the path reached a verdict.
+          if [ "$(( ${PASSED:-0} + ${FAILED:-0} ))" != "1" ]; then
+            echo "::error::single test reached no coherent verdict (passed=$PASSED failed=$FAILED) — unknown/broken run, not a real pass/fail."
+            exit 1
+          fi
           # junit-file output must be EMPTY in single-test mode even though a
           # stale testsprite-junit.xml is present (Codex finding).
-          test -z "${{ steps.run.outputs.junit-file }}" || { echo "::error::junit-file should be empty in single-test mode, got '${{ steps.run.outputs.junit-file }}'"; exit 1; }
-          echo "OK — single test: total=1, no JUnit advertised despite a stale file."
+          [ -z "$JUNIT" ] || { echo "::error::junit-file should be empty in single-test mode, got '$JUNIT'"; exit 1; }
+          echo "OK — single test dispatched, reached a coherent verdict (passed=$PASSED failed=$FAILED), no stale JUnit advertised."
