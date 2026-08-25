@@ -67,6 +67,10 @@ inputs:
     description: "Upload the JUnit report as a workflow artifact."
     required: false
     default: "true"
+  artifact-name:
+    description: "Name of the uploaded JUnit artifact. actions/upload-artifact@v4 fails on a duplicate name within one workflow run, so give each a UNIQUE name when this action runs more than once (a matrix, or several projects) in the same workflow."
+    required: false
+    default: "testsprite-junit"
 
 outputs:
   junit-file:
@@ -262,6 +266,6 @@ runs:
       if: ${{ always() && inputs.test-id == '' && inputs.upload-artifact == 'true' && hashFiles(inputs.report-file) != '' }}
       uses: actions/upload-artifact@v4
       with:
-        name: testsprite-junit
+        name: ${{ inputs.artifact-name }}
         path: ${{ inputs.report-file }}
         if-no-files-found: ignore

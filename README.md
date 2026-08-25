@@ -53,6 +53,7 @@ pass — or if tests were skipped (see [`allow-partial`](#partial-runs)).
 | `endpoint-url`    | `""`                 | API base URL override.                                                      |
 | `node-version`    | `lts/*`              | Node version used to install/run the CLI.                                   |
 | `upload-artifact` | `true`               | Upload the JUnit report as a workflow artifact.                             |
+| `artifact-name`   | `testsprite-junit`   | Name of the uploaded JUnit artifact. Give each a **unique** name when the action runs more than once (matrix / multiple projects) in one workflow — `upload-artifact@v4` fails on duplicate names. |
 
 ## Outputs
 
