@@ -45,7 +45,7 @@ pass — or if tests were skipped (see [`allow-partial`](#partial-runs)).
 | `project`         | `""`                 | Project id. If empty, `TESTSPRITE_PROJECT_ID` must be set.                  |
 | `test-id`         | `""`                 | Run a single test by id (whole-project run otherwise). `project`/`filter` ignored; no JUnit (batch-only). |
 | `filter`          | `""`                 | Only run tests whose name contains this substring. Full-project run only; mutually exclusive with `test-id`. |
-| `target-url`      | `""`                 | Target URL override (V2 path only; ignored on V3).                          |
+| `target-url`      | `""`                 | Target URL override. **Single-test (`test-id`) runs only** — the CLI rejects it on a full-project run, so setting it without `test-id` fails fast. |
 | `report-file`     | `testsprite-junit.xml` | JUnit XML path.                                                           |
 | `cli-version`     | `latest`             | npm version/dist-tag of `@testsprite/testsprite-cli`.                       |
 | `allow-partial`   | `false`              | If false, fail the job when tests are skipped (see below).                  |
@@ -56,12 +56,14 @@ pass — or if tests were skipped (see [`allow-partial`](#partial-runs)).
 
 ## Outputs
 
-| Output       | Description                        |
-| ------------ | ---------------------------------- |
-| `junit-file` | Path to the JUnit report.          |
-| `passed`     | Number of tests that passed.       |
-| `failed`     | Number of tests that did not pass. |
-| `total`      | Total tests in the summary.        |
+| Output       | Description                                                                                                                              |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `junit-file` | Path to the JUnit report (empty in single-test mode — JUnit is batch-only).                                                              |
+| `passed`     | Number of tests that passed.                                                                                                             |
+| `failed`     | Number of tests that ran to a **failing verdict** (`failed`/`blocked`) — not deferred, conflicted, or skipped.                           |
+| `total`      | Total tests in the summary.                                                                                                              |
+| `skipped`    | Tests skipped and not run (full-project runs, e.g. frontend tests on the V2 path; `0` in single-test mode).                             |
+| `error-code` | The CLI's API-layer error code when the run failed **before** a verdict (e.g. `AUTH_INVALID`, `NOT_FOUND`, `UNAVAILABLE`); empty otherwise. |
 
 ## CI-native output
 
