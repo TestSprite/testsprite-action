@@ -6,10 +6,9 @@ terminal verdict, writes a **JUnit** report, emits **`::error::` annotations** +
 a **job summary** for failures, and — by default — **fails the job when tests
 are skipped**, so a partial run is never reported green.
 
-> **Status: beta.** Targets projects on the V3 execution path via `--project`.
-> Not yet published to the Marketplace — reference it by commit SHA (or a branch)
-> until it is. A precise "run a named test list" input lands once the CLI's test
-> list surface ships.
+> **Status: v1.** Pin `@v1` (moving major tag) or `@v1.0.0`. Targets projects on
+> the V3 execution path via `--project`. A precise "run a named test list" input
+> lands once the CLI's test list surface ships.
 
 ## Prerequisites
 
@@ -21,13 +20,19 @@ are skipped**, so a partial run is never reported green.
 
 ```yaml
 name: TestSprite
-on: [push]
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    # Fork PRs run without repository secrets, so the API key would be empty and
+    # the check permanently red. Skip forks (a maintainer's push still runs it).
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
-      - uses: TestSprite/testsprite-action@<sha>   # pin a commit SHA (beta)
+      - uses: TestSprite/testsprite-action@v1
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY }}
           project: "your-project-id"
@@ -99,9 +104,11 @@ on:
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    # Skip fork PRs (no repository secrets ⇒ empty api-key ⇒ permanently red).
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - id: testsprite
-        uses: TestSprite/testsprite-action@<sha>
+        uses: TestSprite/testsprite-action@v1
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY }}
           project: "your-project-id"
