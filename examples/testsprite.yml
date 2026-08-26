@@ -9,6 +9,9 @@ on:
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    # Fork PRs run without repository secrets, so the API key would be empty and
+    # the check permanently red. Skip forks (a maintainer's push still runs it).
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - name: Run TestSprite tests
         id: testsprite

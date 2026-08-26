@@ -20,11 +20,17 @@ are skipped**, so a partial run is never reported green.
 
 ```yaml
 name: TestSprite
-on: [push]
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    # Fork PRs run without repository secrets, so the API key would be empty and
+    # the check permanently red. Skip forks (a maintainer's push still runs it).
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - uses: TestSprite/testsprite-action@v1
         with:
@@ -98,6 +104,8 @@ on:
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    # Skip fork PRs (no repository secrets ⇒ empty api-key ⇒ permanently red).
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - id: testsprite
         uses: TestSprite/testsprite-action@v1
