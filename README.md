@@ -6,10 +6,9 @@ terminal verdict, writes a **JUnit** report, emits **`::error::` annotations** +
 a **job summary** for failures, and — by default — **fails the job when tests
 are skipped**, so a partial run is never reported green.
 
-> **Status: beta.** Targets projects on the V3 execution path via `--project`.
-> Not yet published to the Marketplace — reference it by commit SHA (or a branch)
-> until it is. A precise "run a named test list" input lands once the CLI's test
-> list surface ships.
+> **Status: v1.** Pin `@v1` (moving major tag) or `@v1.0.0`. Targets projects on
+> the V3 execution path via `--project`. A precise "run a named test list" input
+> lands once the CLI's test list surface ships.
 
 ## Prerequisites
 
@@ -27,7 +26,7 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     steps:
-      - uses: TestSprite/testsprite-action@<sha>   # pin a commit SHA (beta)
+      - uses: TestSprite/testsprite-action@v1
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY }}
           project: "your-project-id"
@@ -101,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: testsprite
-        uses: TestSprite/testsprite-action@<sha>
+        uses: TestSprite/testsprite-action@v1
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY }}
           project: "your-project-id"

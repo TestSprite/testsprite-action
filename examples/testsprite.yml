@@ -12,7 +12,7 @@ jobs:
     steps:
       - name: Run TestSprite tests
         id: testsprite
-        uses: TestSprite/testsprite-action@<sha> # beta: pin a commit SHA
+        uses: TestSprite/testsprite-action@v1
         with:
           api-key: ${{ secrets.TESTSPRITE_API_KEY }}
           project: "your-project-id"
