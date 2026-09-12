@@ -118,6 +118,33 @@ jobs:
         run: echo "passed=${{ steps.testsprite.outputs.passed }} / total=${{ steps.testsprite.outputs.total }}"
 ```
 
+## What the action sends
+
+Every CLI call the action makes is tagged with
+`TESTSPRITE_CLIENT=github-action/<ref>`, where `<ref>` is the tag, branch, or
+SHA you pinned (`v1`, `v1.1.0`, …). The CLI appends it to its `User-Agent`
+(`testsprite-cli/<version> (github-action/<ref>)`) and to its usage-telemetry
+event, so runs triggered from CI are attributable in the TestSprite dashboard
+and telemetry. The tag carries only that identifier — no key, URL, or test data.
+A ref that does not fit the tag format (e.g. a branch containing `/`) is
+sanitized, and an empty one is reported as `unknown`; the value is set by the
+action and is not configurable.
+
+The CLI's own usage telemetry (one best-effort "command outcome" event per
+invocation: command name, outcome, exit code, duration, CLI/OS/Node version —
+never your API key, target URLs, or error messages) can be disabled by setting
+`TESTSPRITE_NO_TELEMETRY=1` (or the cross-tool `DO_NOT_TRACK=1`) in the step's
+`env:`:
+
+```yaml
+      - uses: TestSprite/testsprite-action@v1
+        env:
+          TESTSPRITE_NO_TELEMETRY: "1"
+        with:
+          api-key: ${{ secrets.TESTSPRITE_API_KEY }}
+          project: "your-project-id"
+```
+
 ## How it works
 
 A thin **composite action** (no bundled JS): `actions/setup-node` → `npm install

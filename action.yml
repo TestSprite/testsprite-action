@@ -126,6 +126,11 @@ runs:
         INPUT_TARGET_URL: ${{ inputs.target-url }}
         INPUT_TIMEOUT: ${{ inputs.timeout }}
         INPUT_ALLOW_PARTIAL: ${{ inputs.allow-partial }}
+        # Identifies this action to the CLI, which appends it to its User-Agent and
+        # telemetry so CI runs are attributable. github.action_ref is whatever the
+        # consumer pinned (v1, v1.2.3, a branch, or a 40-char SHA); it is sanitized
+        # in the script below before the CLI runs.
+        TESTSPRITE_CLIENT: github-action/${{ github.action_ref }}
       run: |
         set -uo pipefail
 
@@ -156,6 +161,23 @@ runs:
           echo "::error title=TestSprite::test-id and filter are mutually exclusive (filter only applies to a full-project run)."
           exit 1
         fi
+
+        # TESTSPRITE_CLIENT (set in env: above as github-action/<action_ref>) is only
+        # honored by the CLI when it has the shape `<client>/<ref>` with <ref>
+        # matching [0-9A-Za-z][0-9A-Za-z._+-]{0,39}. A tag (v1, v1.2.3) or a 40-char
+        # SHA already fits; a branch like `feat/x` carries a `/` that breaks the
+        # shape, and a local `uses: ./` leaves action_ref empty. Normalize BEFORE
+        # the CLI is invoked: replace anything outside the class with `-`, drop a
+        # leading non-alphanumeric run, cap at 40 chars, and fall back to `unknown`
+        # when nothing usable is left. LC_ALL=C keeps the byte classes ASCII-only
+        # regardless of the runner's locale.
+        client_ref="${TESTSPRITE_CLIENT#github-action/}"
+        client_ref="$(printf '%s' "$client_ref" \
+          | LC_ALL=C tr -c '0-9A-Za-z._+-' '-' \
+          | LC_ALL=C sed -E 's/^[^0-9A-Za-z]+//' \
+          | cut -c1-40)"
+        if [ -z "$client_ref" ]; then client_ref="unknown"; fi
+        export TESTSPRITE_CLIENT="github-action/${client_ref}"
 
         summary="$(mktemp)"
         envjson="$(mktemp)"
