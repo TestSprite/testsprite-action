@@ -72,6 +72,25 @@ inputs:
     description: "Name of the uploaded JUnit artifact. actions/upload-artifact@v4 fails on a duplicate name within one workflow run, so give each a UNIQUE name when this action runs more than once (a matrix, or several projects) in the same workflow."
     required: false
     default: "testsprite-junit"
+  comment:
+    description: >
+      Post the results as a comment on the pull request. Default false: the job
+      status, the ::error:: annotations and the job summary already carry the
+      verdict, and plenty of teams do not want a bot comment on every PR. When
+      true, ONE comment per PR is created and then updated in place by every
+      later run — never a new comment per push. Needs `github-token` and
+      `permissions: pull-requests: write`. A run with no pull request to comment
+      on (a push build), a missing token, or a fork PR whose token is read-only
+      is skipped with a warning: commenting never fails the job.
+    required: false
+    default: "false"
+  github-token:
+    description: >
+      Token used to post the PR comment; read only when `comment: true`.
+      Normally `${{ secrets.GITHUB_TOKEN }}`, with `permissions:
+      pull-requests: write` on the job.
+    required: false
+    default: ""
 
 outputs:
   junit-file:
@@ -238,6 +257,13 @@ runs:
           echo "error-code=$error_code"
         } >> "$GITHUB_OUTPUT"
 
+        # Hand the summary path to the PR-comment step (a separate shell, so the
+        # local `$summary` would be gone). Written even when the file is missing
+        # or empty — the comment step degrades to counts-only rather than
+        # silently skipping, so a crashed run still reports on the PR.
+        echo "TESTSPRITE_SUMMARY_FILE=$summary" >> "$GITHUB_ENV"
+        echo "TESTSPRITE_CLI_EXIT=$code" >> "$GITHUB_ENV"
+
         # Partial-run guard (full-project runs only): skipped tests are invisible
         # to a pass/fail count, so a batch that skipped everything can look clean.
         # Fail unless allow-partial is set.
@@ -312,6 +338,142 @@ runs:
         # non-zero exit (a real failure verdict, crash, auth, or timeout→7) reds the
         # job, and a clean exit that ran something is a genuine pass.
         exit "$code"
+
+    - name: Post PR comment
+      # `always()`: a red run is exactly when the comment is worth having, and
+      # the run step exits non-zero on failure. Everything inside degrades to a
+      # warning — a comment is a courtesy, never a gate.
+      if: ${{ always() && inputs.comment == 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_REPO: ${{ github.repository }}
+        # `pull_request` carries the number directly; `deployment_status` (the
+        # deployment-gated shape) carries only a SHA, so the PR is resolved from
+        # it below.
+        EVENT_PR: ${{ github.event.pull_request.number }}
+        EVENT_SHA: ${{ github.event.deployment.sha || github.event.pull_request.head.sha || github.sha }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        JOB_STATUS: ${{ job.status }}
+        INPUT_TEST_ID: ${{ inputs.test-id }}
+        OUT_PASSED: ${{ steps.run.outputs.passed }}
+        OUT_FAILED: ${{ steps.run.outputs.failed }}
+        OUT_TOTAL: ${{ steps.run.outputs.total }}
+        OUT_SKIPPED: ${{ steps.run.outputs.skipped }}
+        OUT_TIMED_OUT: ${{ steps.run.outputs.timed-out }}
+        OUT_ERROR_CODE: ${{ steps.run.outputs.error-code }}
+      run: |
+        set -uo pipefail
+
+        warn() { echo "::warning title=TestSprite::$*"; }
+
+        if [ -z "${GH_TOKEN:-}" ]; then
+          warn "comment: true but no github-token was provided — skipping the PR comment. Pass github-token: \${{ secrets.GITHUB_TOKEN }} and permissions: pull-requests: write."
+          exit 0
+        fi
+
+        # Resolve the PR to comment on. A deployment_status run knows only the
+        # deployed SHA, so ask GitHub which PR that commit belongs to. A push
+        # build legitimately has no PR — that is a skip, not a problem.
+        pr="${EVENT_PR:-}"
+        if [ -z "$pr" ] && [ -n "${EVENT_SHA:-}" ]; then
+          pr=$(gh api "repos/${GH_REPO}/commits/${EVENT_SHA}/pulls" \
+                 --jq 'map(select(.state == "open")) | .[0].number // empty' 2>/dev/null || echo "")
+        fi
+        if [ -z "$pr" ]; then
+          echo "No pull request associated with this run — nothing to comment on."
+          exit 0
+        fi
+
+        summary="${TESTSPRITE_SUMMARY_FILE:-}"
+        cli_exit="${TESTSPRITE_CLI_EXIT:-}"
+
+        # Headline mirrors the JOB's verdict, not a count: the job is what gates
+        # the merge, and the two must never disagree on the PR (the whole point
+        # of DEV-836 was surfaces telling different stories).
+        case "$JOB_STATUS" in
+          success) head="### ✅ TestSprite — tests passed" ;;
+          cancelled) head="### ⚪ TestSprite — run cancelled" ;;
+          *) head="### ❌ TestSprite — tests failed" ;;
+        esac
+
+        body="$(mktemp)"
+        {
+          # Hidden marker: how the next run finds THIS comment to update. Distinct
+          # from the GitHub App's own marker so the two never clobber each other
+          # when a repo happens to have both.
+          echo "<!-- testsprite-action-comment -->"
+          echo "$head"
+          echo
+          if [ -n "$INPUT_TEST_ID" ]; then
+            echo "Single test \`${INPUT_TEST_ID}\`."
+          else
+            # `skipped` is called out separately from `failed` — a test that never
+            # ran is not a failure, and conflating them is the bug DEV-836 fixed.
+            echo "| Passed | Failed | Skipped | Timed out | Total |"
+            echo "| ---: | ---: | ---: | ---: | ---: |"
+            echo "| ${OUT_PASSED:-0} | ${OUT_FAILED:-0} | ${OUT_SKIPPED:-0} | ${OUT_TIMED_OUT:-0} | ${OUT_TOTAL:-0} |"
+          fi
+          echo
+
+          if [ -n "${OUT_ERROR_CODE:-}" ]; then
+            echo "> The run did not reach a verdict: \`${OUT_ERROR_CODE}\` — this is an infrastructure or configuration failure, not a test result."
+            echo
+          fi
+
+          # Per-test detail for everything that did not pass. Sourced from the
+          # same summary artifact the annotations use, so the comment cannot
+          # disagree with them.
+          if [ -s "$summary" ]; then
+            rows=$(jq -r '
+              [.runs[]? | select(.status != "passed")] as $bad
+              | if ($bad | length) == 0 then ""
+                else
+                  "| Test | Status | Detail |\n| --- | --- | --- |\n" +
+                  ([$bad[] |
+                    ((.title // .testId) | gsub("\\|"; "\\|")) as $name
+                    | (.executionUrl // .dashboardUrl // "") as $link
+                    | (if $link == "" then $name else "[" + $name + "](" + $link + ")" end) as $cell
+                    | "| " + $cell + " | " + .status + " | " +
+                      ((.error // "") | gsub("\\|"; "\\|") | gsub("\n"; " ") | .[0:160]) + " |"
+                   ] | join("\n"))
+                end' "$summary" 2>/dev/null || echo "")
+            if [ -n "$rows" ]; then
+              echo "$rows"
+              echo
+            fi
+          elif [ "${cli_exit:-0}" != "0" ]; then
+            echo "> No summary artifact was produced, so per-test detail is unavailable (CLI exit ${cli_exit})."
+            echo
+          fi
+
+          echo "[View the run](${RUN_URL})"
+        } > "$body"
+
+        # Upsert: find this action's own comment on the PR by its marker.
+        # `--paginate` because a busy PR can push it past the first page.
+        existing=$(gh api "repos/${GH_REPO}/issues/${pr}/comments" --paginate \
+                     --jq 'map(select(.body | contains("<!-- testsprite-action-comment -->"))) | .[0].id // empty' \
+                     2>/dev/null || echo "")
+
+        if [ -n "$existing" ]; then
+          if gh api -X PATCH "repos/${GH_REPO}/issues/comments/${existing}" -F body=@"$body" --silent 2>/tmp/ts-comment-err; then
+            echo "Updated the existing TestSprite comment on PR #${pr}."
+            exit 0
+          fi
+        else
+          if gh api -X POST "repos/${GH_REPO}/issues/${pr}/comments" -F body=@"$body" --silent 2>/tmp/ts-comment-err; then
+            echo "Posted a TestSprite comment on PR #${pr}."
+            exit 0
+          fi
+        fi
+
+        # A fork PR's GITHUB_TOKEN is read-only, so this 403s by design. The
+        # annotations and the job status still carry the verdict — say what
+        # happened and leave the job's own result alone.
+        detail=$(head -c 300 /tmp/ts-comment-err 2>/dev/null || echo "")
+        warn "could not post the PR comment (a fork PR's token is read-only, or the job lacks permissions: pull-requests: write). The verdict is still in the job status and annotations. ${detail}"
+        exit 0
 
     - name: Upload JUnit report
       # Only the full-project run produces a JUnit report. Gate on an empty

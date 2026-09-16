@@ -59,6 +59,8 @@ pass — or if tests were skipped (see [`allow-partial`](#partial-runs)).
 | `node-version`    | `lts/*`              | Node version used to install/run the CLI.                                   |
 | `upload-artifact` | `true`               | Upload the JUnit report as a workflow artifact.                             |
 | `artifact-name`   | `testsprite-junit`   | Name of the uploaded JUnit artifact. Give each a **unique** name when the action runs more than once (matrix / multiple projects) in one workflow — `upload-artifact@v4` fails on duplicate names. |
+| `comment`         | `false`              | Post the results as a PR comment (one comment per PR, updated in place). Needs `github-token` + `permissions: pull-requests: write` — see [PR comments](#pr-comments). |
+| `github-token`    | `""`                 | Token used to post the PR comment; read only when `comment: true`. Normally `${{ secrets.GITHUB_TOKEN }}`. |
 
 ## Outputs
 
@@ -81,6 +83,47 @@ Because the action runs under `GITHUB_ACTIONS=true`, the CLI auto-emits:
 
 No configuration needed. The JUnit report is also uploaded as an artifact
 (disable with `upload-artifact: false`) and consumed by any JUnit-aware tooling.
+
+## PR comments
+
+Off by default. The job status, the `::error::` annotations and the job summary
+already carry the verdict, and plenty of teams would rather not have a bot
+comment on every PR — so commenting is one flag, not a default:
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write # required for the comment
+
+steps:
+  - uses: TestSprite/testsprite-action@v1
+    with:
+      api-key: ${{ secrets.TESTSPRITE_API_KEY }}
+      project: "proj_xxxxxxxx"
+      comment: true
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+**One comment per PR.** The comment carries a hidden marker
+(`<!-- testsprite-action-comment -->`); every later run finds it and edits it in
+place, so a PR with twenty pushes still has exactly one TestSprite comment
+showing the latest result — not twenty.
+
+It reports the counts (`passed` / `failed` / `skipped` / `timed out`, kept
+distinct — a test that never ran is not a failure), a row per non-passed test
+linking to its result page, and a link back to the run. The headline mirrors the
+**job's** verdict rather than a count, so the comment and the check can never
+disagree.
+
+**Commenting never fails the job.** A push build has no PR to comment on; a fork
+PR's `GITHUB_TOKEN` is read-only by design; a job without
+`pull-requests: write` cannot post. Each of those is a warning and the run's own
+verdict is unaffected — it is still in the job status and the annotations.
+
+> Already using the **TestSprite GitHub App**? It posts its own PR comment.
+> Leave `comment: false` here to avoid two bots reporting the same run. (The two
+> use different markers, so they will not overwrite each other — you would just
+> get both.)
 
 ## Partial runs
 
