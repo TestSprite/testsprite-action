@@ -45,6 +45,20 @@ inputs:
     description: "npm version or dist-tag of @testsprite/testsprite-cli to install."
     required: false
     default: "latest"
+  auto-heal:
+    description: >
+      When true (default), a test whose stored code no longer executes is
+      re-authored by the agent and run against the new code, instead of
+      replaying a script that can only fail. This is what keeps a suite from
+      decaying across pushes — on the second and later run of the same test,
+      replaying stored code passes far less often than the agent path. Set
+      false for a strict regression gate, where you want a byte-identical
+      replay and a drifted test to stay red. Code you wrote yourself is never
+      re-authored either way. Requires a CLI new enough to have
+      `--no-auto-heal`; older CLIs ignore this input and take the server
+      default (heal).
+    required: false
+    default: "true"
   allow-partial:
     description: >
       When false (default), the job fails if any test was skipped and did not
@@ -126,6 +140,7 @@ runs:
         INPUT_TARGET_URL: ${{ inputs.target-url }}
         INPUT_TIMEOUT: ${{ inputs.timeout }}
         INPUT_ALLOW_PARTIAL: ${{ inputs.allow-partial }}
+        INPUT_AUTO_HEAL: ${{ inputs.auto-heal }}
       run: |
         set -uo pipefail
 
@@ -156,6 +171,17 @@ runs:
           echo "::error title=TestSprite::test-id and filter are mutually exclusive (filter only applies to a full-project run)."
           exit 1
         fi
+        # `auto-heal: false` needs a CLI that has the flag. Commander errors on an
+        # unknown option, so without this check a pinned older cli-version fails
+        # with "unknown option '--no-auto-heal'" — an error about a flag the
+        # consumer never typed, on a run that would OTHERWISE have healed, i.e.
+        # exactly opposite to what they asked for. Checked only on the opt-out
+        # path, so the default costs nothing.
+        if [ "$INPUT_AUTO_HEAL" = "false" ] && ! testsprite test run --help 2>/dev/null | grep -q -- '--no-auto-heal'; then
+          emit_zero_outputs
+          echo "::error title=TestSprite::auto-heal: false requires a newer CLI — the installed $(testsprite --version 2>/dev/null || echo 'version') has no --no-auto-heal on 'test run'. Raise cli-version (or drop the pin to use 'latest'), or remove auto-heal: false."
+          exit 1
+        fi
 
         summary="$(mktemp)"
         envjson="$(mktemp)"
@@ -184,6 +210,10 @@ runs:
           # batch-only, so no --report here.
           args=(test run "$INPUT_TEST_ID" --wait --output json --summary-file "$summary" --timeout "$INPUT_TIMEOUT")
           if [ -n "$INPUT_TARGET_URL" ]; then args+=(--target-url "$INPUT_TARGET_URL"); fi
+          # Only the opt-out is ever passed. There is no `--auto-heal` flag: on the
+          # wire an explicit true means an UNCONDITIONAL heal, while saying nothing
+          # requests the default that still protects user-authored code.
+          if [ "$INPUT_AUTO_HEAL" = "false" ]; then args+=(--no-auto-heal); fi
           set +e; testsprite "${args[@]}" > "$envjson" 2> "$runlog"; code=$?; set -e
           status=$(jq -r '.status // "unknown"' "$envjson" 2>/dev/null || echo unknown)
         else
@@ -199,6 +229,8 @@ runs:
                 --summary-file "$summary"
                 --timeout "$INPUT_TIMEOUT")
           if [ -n "$INPUT_FILTER" ]; then args+=(--filter "$INPUT_FILTER"); fi
+          # See the single-test branch for why only the opt-out is passed.
+          if [ "$INPUT_AUTO_HEAL" = "false" ]; then args+=(--no-auto-heal); fi
           set +e; testsprite "${args[@]}" > "$envjson" 2> "$runlog"; code=$?; set -e
           # Skipped (frontend-on-V2 etc.) live on the raw envelope, not the summary.
           skipped=$(jq -r '((.skippedFrontend // []) + (.skippedIntegration // [])) | length' "$envjson" 2>/dev/null || echo 0)

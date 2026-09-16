@@ -53,6 +53,7 @@ pass — or if tests were skipped (see [`allow-partial`](#partial-runs)).
 | `target-url`      | `""`                 | Target URL override. **Single-test (`test-id`) runs only** — the CLI rejects it on a full-project run, so setting it without `test-id` fails fast. |
 | `report-file`     | `testsprite-junit.xml` | JUnit XML path.                                                           |
 | `cli-version`     | `latest`             | npm version/dist-tag of `@testsprite/testsprite-cli`.                       |
+| `auto-heal`       | `true`               | Let the agent re-author a test whose stored code no longer runs, instead of replaying a script that can only fail (see below). Set `false` for a strict regression gate. |
 | `allow-partial`   | `false`              | If false, fail the job when tests are skipped (see below).                  |
 | `timeout`         | `600`                | Max seconds to wait for a terminal verdict (1-3600).                        |
 | `endpoint-url`    | `""`                 | API base URL override.                                                      |
@@ -117,6 +118,41 @@ jobs:
       - if: always()
         run: echo "passed=${{ steps.testsprite.outputs.passed }} / total=${{ steps.testsprite.outputs.total }}"
 ```
+
+## Auto-heal
+
+By default a test whose stored code no longer executes is **re-authored by the
+agent** and run against the new code. This matters most in CI, because CI is where
+the same tests run over and over: the first run generates code, and every run after
+it would otherwise replay that code unchanged. Replaying stored code passes far
+less often than the agent path, and a suite left on replay decays into red builds
+for changes that broke nothing.
+
+Healing re-saves the test's code, so the stored version is replaced by the agent's.
+
+Two things it deliberately does not do:
+
+- **It never re-authors code you wrote** — uploaded through `test code put`, passed
+  to `test create --code-file`, or hand-edited in the portal. That code is replayed
+  as written, and a failure stays a failure.
+- **It does not make a verdict deterministic.** A healed pass can hide a real
+  regression. For a strict regression gate — or a reproduction you are bisecting —
+  set `auto-heal: false`, which replays byte-identically and leaves a drifted test
+  red.
+
+```yaml
+- uses: TestSprite/testsprite-action@v1
+  with:
+    api-key: ${{ secrets.TESTSPRITE_API_KEY }}
+    project: "your-project-id"
+    auto-heal: false # strict replay; a drifted test stays red
+```
+
+Older CLI versions have no `--no-auto-heal` on `test run`. Combining `auto-heal:
+false` with such a pinned `cli-version` **fails the step up front**, naming the
+installed version — rather than letting the run proceed and heal, which is the
+opposite of what was asked for. Raise `cli-version`, or drop the pin to use
+`latest`. Leaving `auto-heal` at its default works on any version.
 
 ## How it works
 
