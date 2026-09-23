@@ -1,5 +1,18 @@
 # TestSprite GitHub Action
 
+> [!WARNING]
+> **This action is frozen.** It keeps working at `@v1`, but it will not get new
+> inputs or features — new capabilities (environments, CI gating) land in the
+> TestSprite CLI. For new workflows, call the CLI directly from your workflow
+> YAML (see [Calling the CLI directly](#calling-the-cli-directly)) and choose
+> where tests run with `--env <name>`.
+>
+> The **`target-url` input is deprecated**, together with the CLI's
+> `--target-url` flag. The action installs the latest CLI by default, so the
+> input stops working when a future CLI release removes the flag. Create an
+> environment once (`testsprite project env create <project-id> --name <name> --url <url>`)
+> and select it with `--env <name>` instead.
+
 Run [TestSprite](https://www.testsprite.com) tests in GitHub Actions by wrapping
 the `testsprite` CLI. The action installs the CLI, runs a project's tests to a
 terminal verdict, writes a **JUnit** report, emits **`::error::` annotations** +
@@ -50,7 +63,7 @@ pass — or if tests were skipped (see [`allow-partial`](#partial-runs)).
 | `project`         | `""`                 | Project id. If empty, `TESTSPRITE_PROJECT_ID` must be set.                  |
 | `test-id`         | `""`                 | Run a single test by id (whole-project run otherwise). `project` ignored; `filter` must NOT be set (mutually exclusive — fails fast if both given); no JUnit (batch-only). |
 | `filter`          | `""`                 | Only run tests whose name contains this substring. Full-project run only; mutually exclusive with `test-id`. |
-| `target-url`      | `""`                 | Target URL override. **Single-test (`test-id`) runs only** — the CLI rejects it on a full-project run, so setting it without `test-id` fails fast. |
+| `target-url`      | `""`                 | **Deprecated** — stops working when a future CLI release removes `--target-url`; prints a `::warning::` when set. Use an environment and `--env` via the CLI instead. Target URL override for **single-test (`test-id`) runs only** — the CLI rejects it on a full-project run, so setting it without `test-id` fails fast. |
 | `report-file`     | `testsprite-junit.xml` | JUnit XML path.                                                           |
 | `cli-version`     | `latest`             | npm version/dist-tag of `@testsprite/testsprite-cli`.                       |
 | `allow-partial`   | `false`              | If false, fail the job when tests are skipped (see below).                  |
@@ -117,6 +130,44 @@ jobs:
       - if: always()
         run: echo "passed=${{ steps.testsprite.outputs.passed }} / total=${{ steps.testsprite.outputs.total }}"
 ```
+
+## Calling the CLI directly
+
+The same run without this action — install the CLI and pick the environment by
+name. `--env` must name an environment that exists on the project (an unknown
+name fails instead of falling back to the default); omit it to use the
+project's **Default** environment.
+
+```yaml
+name: TestSprite
+
+on:
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install the TestSprite CLI
+        run: npm install -g @testsprite/testsprite-cli@latest
+      - name: Run TestSprite tests
+        env:
+          TESTSPRITE_API_KEY: ${{ secrets.TESTSPRITE_API_KEY }}
+          TESTSPRITE_PROJECT_ID: your-project-id
+        run: |
+          mkdir -p results
+          testsprite test run --all --env staging --wait \
+            --report junit --report-file results/testsprite-junit.xml \
+            --timeout 600
+```
+
+Under `GITHUB_ACTIONS=true` the CLI emits `::error::` annotations and a job
+summary on its own. See the [CLI CI/CD guide](https://www.testsprite.com/docs)
+for exit codes and preview-environment recipes.
 
 ## What the action sends
 

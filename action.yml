@@ -34,7 +34,7 @@ inputs:
     required: false
     default: ""
   target-url:
-    description: "Optional target URL override. Single-test (test-id) runs only — the CLI rejects it on a full-project run, so setting it without test-id fails fast."
+    description: "Deprecated (stops working when a future CLI release removes --target-url; prints a warning when set). Optional target URL override. Single-test (test-id) runs only — the CLI rejects it on a full-project run, so setting it without test-id fails fast."
     required: false
     default: ""
   report-file:
@@ -151,6 +151,12 @@ runs:
         # together with `--all` (VALIDATION_ERROR / exit 5), so on the full-project
         # path it would ALWAYS fail with a CLI-internal message about a flag the
         # consumer never typed. Reject it here with a clear one instead.
+        # target-url is deprecated together with the CLI's --target-url flag. The
+        # action installs the latest CLI by default, so the input stops working
+        # when a future CLI release removes the flag; say so once, up front.
+        if [ -n "$INPUT_TARGET_URL" ]; then
+          echo "::warning title=TestSprite::The target-url input is deprecated and will stop working when a future TestSprite CLI release removes --target-url. Create an environment once (testsprite project env create <project-id> --name <name> --url <url>) and run the CLI with --env <name>; this action is frozen, see its README for calling the CLI directly."
+        fi
         if [ -n "$INPUT_TARGET_URL" ] && [ -z "$INPUT_TEST_ID" ]; then
           emit_zero_outputs
           echo "::error title=TestSprite::target-url applies to a single-test run only (the CLI rejects --target-url with --all). Set test-id, or remove target-url."
