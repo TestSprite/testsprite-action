@@ -2,7 +2,7 @@
 
 > [!WARNING]
 > **This action is deprecated** and will stop working on **<SUNSET_DATE>**.
-> Please migrate to <MIGRATION_TARGET>: <MIGRATION_URL>
+> Please remove it from your workflows.
 
 Run [TestSprite](https://www.testsprite.com) tests in GitHub Actions by wrapping
 the `testsprite` CLI. The action installs the CLI, runs a project's tests to a

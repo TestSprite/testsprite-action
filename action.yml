@@ -102,7 +102,7 @@ runs:
     - name: Deprecation notice
       shell: bash
       run: |
-        MSG="TestSprite/testsprite-action is deprecated and will stop working on <SUNSET_DATE>. Please migrate to <MIGRATION_TARGET>: <MIGRATION_URL>"
+        MSG="TestSprite/testsprite-action is deprecated and will stop working on <SUNSET_DATE>. Please remove it from your workflows."
         echo "::warning title=TestSprite action is deprecated::$MSG"
         printf '> [!WARNING]\n> %s\n\n' "$MSG" >> "$GITHUB_STEP_SUMMARY"
 
