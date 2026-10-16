@@ -1,9 +1,10 @@
 # TestSprite GitHub Action
 
 > [!WARNING]
-> **This action is frozen.** It keeps working at `@v1`, but it will not get new
-> inputs or features — new capabilities (environments, CI gating) land in the
-> TestSprite CLI. For new workflows, call the CLI directly from your workflow
+> **This action is deprecated.** It keeps working at `@v1` for now, prints a
+> deprecation warning on every run, and will not get new inputs or features —
+> new capabilities (environments, CI gating) land in the TestSprite CLI.
+> Migrate existing workflows and write new ones by calling the CLI directly from your workflow
 > YAML (see [Calling the CLI directly](#calling-the-cli-directly)) and choose
 > where tests run with `--env <name>`.
 >
