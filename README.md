@@ -1,12 +1,12 @@
 # TestSprite GitHub Action
 
 > [!WARNING]
-> **This action is deprecated.** It keeps working at `@v1` for now, prints a
-> deprecation warning on every run, and will not get new inputs or features —
-> new capabilities (environments, CI gating) land in the TestSprite CLI.
-> Migrate existing workflows and write new ones by calling the CLI directly from your workflow
-> YAML (see [Calling the CLI directly](#calling-the-cli-directly)) and choose
-> where tests run with `--env <name>`.
+> **This action is deprecated and will stop working on October 23, 2026.**
+> After that date, workflows that use `TestSprite/testsprite-action@v1` will
+> fail. Before then, replace it with a direct call to the TestSprite CLI in
+> your workflow YAML (see [Calling the CLI directly](#calling-the-cli-directly))
+> and choose where tests run with `--env <name>`. New capabilities
+> (environments, CI gating) land only in the CLI.
 >
 > The **`target-url` input is deprecated**, together with the CLI's
 > `--target-url` flag. The action installs the latest CLI by default, so the

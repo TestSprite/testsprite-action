@@ -102,7 +102,7 @@ runs:
     - name: Deprecation notice
       shell: bash
       run: |
-        MSG="TestSprite/testsprite-action is deprecated. Call the TestSprite CLI directly from your workflow instead: https://github.com/TestSprite/testsprite-action#calling-the-cli-directly"
+        MSG="TestSprite/testsprite-action is deprecated and will stop working on October 23, 2026. Replace it with a direct call to the TestSprite CLI: https://github.com/TestSprite/testsprite-action#calling-the-cli-directly"
         echo "::warning title=TestSprite action is deprecated::$MSG"
         if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
           printf '> [!WARNING]\n> %s\n\n' "$MSG" >> "$GITHUB_STEP_SUMMARY" || true
