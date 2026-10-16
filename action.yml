@@ -99,6 +99,13 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: Deprecation notice
+      shell: bash
+      run: |
+        MSG="TestSprite/testsprite-action is deprecated and will stop working on <SUNSET_DATE>. Please remove it from your workflows."
+        echo "::warning title=TestSprite action is deprecated::$MSG"
+        printf '> [!WARNING]\n> %s\n\n' "$MSG" >> "$GITHUB_STEP_SUMMARY"
+
     - name: Set up Node
       uses: actions/setup-node@v4
       with:
@@ -118,6 +125,7 @@ runs:
         # All inputs travel via env (never interpolated into the script body)
         # so a value can't inject shell.
         TESTSPRITE_API_KEY: ${{ inputs.api-key }}
+        TESTSPRITE_CLIENT: github-action/v1
         TESTSPRITE_API_URL: ${{ inputs.endpoint-url }}
         TESTSPRITE_PROJECT_ID: ${{ inputs.project }}
         INPUT_REPORT_FILE: ${{ inputs.report-file }}

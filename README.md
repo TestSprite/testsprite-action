@@ -1,5 +1,9 @@
 # TestSprite GitHub Action
 
+> [!WARNING]
+> **This action is deprecated** and will stop working on **<SUNSET_DATE>**.
+> Please remove it from your workflows.
+
 Run [TestSprite](https://www.testsprite.com) tests in GitHub Actions by wrapping
 the `testsprite` CLI. The action installs the CLI, runs a project's tests to a
 terminal verdict, writes a **JUnit** report, emits **`::error::` annotations** +
