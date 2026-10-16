@@ -104,7 +104,9 @@ runs:
       run: |
         MSG="TestSprite/testsprite-action is deprecated. Call the TestSprite CLI directly from your workflow instead: https://github.com/TestSprite/testsprite-action#calling-the-cli-directly"
         echo "::warning title=TestSprite action is deprecated::$MSG"
-        printf '> [!WARNING]\n> %s\n\n' "$MSG" >> "$GITHUB_STEP_SUMMARY"
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          printf '> [!WARNING]\n> %s\n\n' "$MSG" >> "$GITHUB_STEP_SUMMARY" || true
+        fi
 
     - name: Set up Node
       uses: actions/setup-node@v4
